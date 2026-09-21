@@ -1,0 +1,161 @@
+name: Nix & NixOS Build, Check, and Publish
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - 'v*'
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  check-and-build:
+    name: Build & Verify Nix Packages and NixOS Modules
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@v16
+
+      - name: Setup Magic Nix Cache
+        uses: DeterminateSystems/magic-nix-cache-action@v9
+
+      - name: Check Nix Flake
+        run: nix flake check --all-systems --print-build-logs
+
+      - name: Build anycast-edge
+        run: nix build .#packages.x86_64-linux.anycast-edge --print-build-logs
+
+      - name: Build anycast-origin
+        run: nix build .#packages.x86_64-linux.anycast-origin --print-build-logs
+
+      - name: Build anycast-ca
+        run: nix build .#packages.x86_64-linux.anycast-ca --print-build-logs
+
+      - name: Build edge-image (Docker)
+        run: nix build .#packages.x86_64-linux.edge-image --print-build-logs
+
+      - name: Build origin-image (Docker)
+        run: nix build .#packages.x86_64-linux.origin-image --print-build-logs
+
+      - name: Test NixOS Module Evaluation
+        run: nix build .#checks.x86_64-linux.nixosModuleTest --print-build-logs
+
+  publish-docker:
+    name: Build and Push Docker Images to GHCR
+    needs: check-and-build
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@v16
+
+      - name: Setup Magic Nix Cache
+        uses: DeterminateSystems/magic-nix-cache-action@v9
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and Push Docker Images
+        run: |
+          OWNER_LOWER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          EDGE_IMAGE_NAME="ghcr.io/${OWNER_LOWER}/anycast-edge"
+          ORIGIN_IMAGE_NAME="ghcr.io/${OWNER_LOWER}/anycast-origin"
+
+          echo "Building layered Docker images via Nix..."
+          nix build .#packages.x86_64-linux.edge-image -o result-edge-image
+          nix build .#packages.x86_64-linux.origin-image -o result-origin-image
+
+          echo "Loading Docker images..."
+          docker load < result-edge-image
+          docker load < result-origin-image
+
+          echo "Tagging edge image..."
+          docker tag anycast-edge:latest "${EDGE_IMAGE_NAME}:latest"
+          docker tag anycast-edge:latest "${EDGE_IMAGE_NAME}:${{ github.sha }}"
+
+          echo "Tagging origin image..."
+          docker tag anycast-origin:latest "${ORIGIN_IMAGE_NAME}:latest"
+          docker tag anycast-origin:latest "${ORIGIN_IMAGE_NAME}:${{ github.sha }}"
+
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            TAG="${GITHUB_REF#refs/tags/}"
+            STRIPPED_TAG="${TAG#v}"
+            echo "Tagging release version: ${TAG}"
+            docker tag anycast-edge:latest "${EDGE_IMAGE_NAME}:${TAG}"
+            docker tag anycast-edge:latest "${EDGE_IMAGE_NAME}:${STRIPPED_TAG}"
+            docker tag anycast-origin:latest "${ORIGIN_IMAGE_NAME}:${TAG}"
+            docker tag anycast-origin:latest "${ORIGIN_IMAGE_NAME}:${STRIPPED_TAG}"
+          fi
+
+          echo "Pushing images to GHCR..."
+          docker push --all-tags "${EDGE_IMAGE_NAME}"
+          docker push --all-tags "${ORIGIN_IMAGE_NAME}"
+
+  release:
+    name: Publish Release Assets
+    needs: check-and-build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@v16
+
+      - name: Setup Magic Nix Cache
+        uses: DeterminateSystems/magic-nix-cache-action@v9
+
+      - name: Build release binaries and bundle archives
+        run: |
+          mkdir -p release-dist
+          TAG_NAME="${GITHUB_REF#refs/tags/}"
+
+          nix build .#packages.x86_64-linux.anycast-edge -o result-edge-linux
+          nix build .#packages.x86_64-linux.anycast-origin -o result-origin-linux
+          nix build .#packages.x86_64-linux.anycast-ca -o result-ca-linux
+
+          tar -czvf "release-dist/anycast-edge-${TAG_NAME}-linux-amd64.tar.gz" -C result-edge-linux/bin anycast-edge
+          tar -czvf "release-dist/anycast-origin-${TAG_NAME}-linux-amd64.tar.gz" -C result-origin-linux/bin anycast-origin
+          tar -czvf "release-dist/anycast-ca-${TAG_NAME}-linux-amd64.tar.gz" -C result-ca-linux/bin anycast-ca
+
+          cd release-dist
+          sha256sum * > SHA256SUMS
+          cd ..
+
+      - name: Upload binaries to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release-dist/*
+          generate_release_notes: true

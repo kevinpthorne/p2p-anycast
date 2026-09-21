@@ -1,0 +1,60 @@
+syntax = "proto3";
+package p2panycast.identity.v1;
+option go_package = "p2p-anycast/pkg/proto/identity;identity";
+
+enum NodeRole {
+  ROLE_UNSPECIFIED = 0;
+  EDGE_ROUTER = 1;
+  ORIGIN_NODE = 2;
+}
+
+enum AuthorizedPolicy {
+  POLICY_CLUSTERED_RTT = 0;
+  POLICY_TLS_SNI = 1;
+  POLICY_FAILOVER_STANDBY = 2;
+  POLICY_STRICT_SINGLETON = 3;
+}
+
+message PortRange {
+  uint32 start = 1;
+  uint32 end = 2;
+}
+
+message ServiceCapability {
+  string service_pattern = 1;                 // Wildcard glob: "pbx-*", "mc-smp"
+  repeated AuthorizedPolicy allowed_policies = 2;
+  repeated PortRange allowed_ports = 3;
+}
+
+message IdentityClaims {
+  uint64 serial_number = 1;
+  string issuer_id = 2;
+  string subject_id = 3;
+  NodeRole role = 4;
+  bytes subject_mldsa_pubkey = 5;             // 2592 bytes (ML-DSA-87)
+  string libp2p_peer_id = 6;                  // Base58-encoded Peer ID
+  int64 not_before = 7;                       // Unix timestamp (seconds)
+  int64 not_after = 8;                        // Unix timestamp (seconds)
+  repeated ServiceCapability capabilities = 9;
+}
+
+message SignedCapabilityManifest {
+  bytes claims_payload = 1;                   // Deterministic Protobuf bytes of IdentityClaims
+  bytes ca_signature = 2;                     // 4627 bytes (ML-DSA-87 signature from Root CA)
+  bytes ca_key_id = 3;                        // 32-byte SHA-256 hash of CA pubkey
+}
+
+message AuthHello {
+  bytes nonce_a = 1;                          // 32 bytes random nonce
+  SignedCapabilityManifest manifest = 2;
+}
+
+message AuthChallenge {
+  bytes nonce_b = 1;                          // 32 bytes random nonce
+  SignedCapabilityManifest manifest = 2;
+  bytes signature_a = 3;                      // ML-DSA-87 signature over nonce_a
+}
+
+message AuthComplete {
+  bytes signature_b = 1;                      // ML-DSA-87 signature over nonce_b
+}

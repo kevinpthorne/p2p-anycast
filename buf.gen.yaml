@@ -1,0 +1,6 @@
+version: v2
+plugins:
+  - local: /Users/kevint/go/bin/protoc-gen-go
+    out: .
+    opt:
+      - module=p2p-anycast

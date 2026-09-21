@@ -1,0 +1,40 @@
+syntax = "proto3";
+package p2panycast.control.v1;
+option go_package = "p2p-anycast/pkg/proto/control;control";
+
+enum TransportProtocol {
+  PROTOCOL_UNSPECIFIED = 0;
+  TCP = 1;
+  UDP = 2;
+  TCP_AND_UDP = 3;
+}
+
+enum RoutingPolicy {
+  CLUSTERED_RTT = 0;      // RTT-optimized active/active across origins
+  TLS_SNI = 1;            // Demux shared port via RFC 6066 SNI
+  FAILOVER_STANDBY = 2;   // Primary/Backup promotion on lease timeout
+  STRICT_SINGLETON = 3;   // Fails closed on origin loss. Absolutely NO fallback.
+}
+
+enum MessageType {
+  ANNOUNCE = 0;
+  HEARTBEAT = 1;
+  REVOKE = 2;
+}
+
+message ServiceRegistration {
+  MessageType type = 1;
+  bytes binding_id = 2;           // 16-byte deterministic BLAKE3 token
+  string service_id = 3;          // Human-readable identifier (e.g., "pbx-core")
+  string origin_peer_id = 4;
+  TransportProtocol protocol = 5;
+  uint32 public_port = 6;         // Requested public port on the Edge
+  RoutingPolicy policy = 7;
+  
+  string sni_hostname = 8;        // Required if policy == TLS_SNI
+  uint32 lease_duration_sec = 9;  // Soft-state lease TTL (default: 60)
+  uint64 lease_epoch = 10;        // Fencing token for STRICT_SINGLETON
+  bool enable_proxy_protocol = 11;// TCP: Inject PROXYv2 binary header
+  
+  bytes origin_hmac_capability = 12; // 16-byte HMAC preventing token swapping
+}

@@ -1,0 +1,7 @@
+bin/
+*.key
+*.priv
+*.pub
+*.pb
+result
+result*
