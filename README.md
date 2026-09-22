@@ -311,7 +311,7 @@ Deploy `anycast-edge` on your public VPS node:
 
 ```bash
 ./bin/anycast-edge \
-  --listen-p2p "/ip4/0.0.0.0/udp/9090/quic-v1" \
+  --listen-p2p "/ip4/0.0.0.0/udp/4002/quic-v1" \
   --manifest edge_manifest.pb \
   --ca-pub ca.pub \
   --identity-key identity.key
@@ -324,7 +324,7 @@ Create `origin_config.json`:
 ```json
 {
   "edge_multiaddrs": [
-    "/ip4/203.0.113.10/udp/9090/quic-v1/p2p/12D3KooWEdgePeerID..."
+    "/ip4/203.0.113.10/udp/4002/quic-v1/p2p/12D3KooWEdgePeerID..."
   ],
   "origin_master_key": "4f8a3c10b7e289d04f8a3c10b7e289d04f8a3c10b7e289d04f8a3c10b7e289d0",
   "services": [
@@ -397,7 +397,7 @@ Add `p2p-anycast` to your system configuration flakes:
           # Enable Edge Router
           services.anycast-edge = {
             enable = true;
-            listenP2P = "/ip4/0.0.0.0/udp/9090/quic-v1";
+            listenP2P = "/ip4/0.0.0.0/udp/4002/quic-v1";
             manifest = /etc/anycast/edge_manifest.pb;
             caPub = /etc/anycast/ca.pub;
             identityKey = "/var/lib/anycast-edge/identity.key";
@@ -420,7 +420,7 @@ Add `p2p-anycast` to your system configuration flakes:
             identityKey = "/var/lib/anycast-origin/identity.key";
             settings = {
               edge_multiaddrs = [
-                "/ip4/203.0.113.10/udp/9090/quic-v1/p2p/12D3KooWEdgePeerID..."
+                "/ip4/203.0.113.10/udp/4002/quic-v1/p2p/12D3KooWEdgePeerID..."
               ];
               origin_master_key = "4f8a3c10b7e289d04f8a3c10b7e289d04f8a3c10b7e289d04f8a3c10b7e289d0";
               services = [
@@ -454,7 +454,7 @@ docker run -d \
   --net=host \
   -v /etc/anycast:/data \
   ghcr.io/<owner>/anycast-edge:latest \
-  --listen-p2p "/ip4/0.0.0.0/udp/9090/quic-v1" \
+  --listen-p2p "/ip4/0.0.0.0/udp/4002/quic-v1" \
   --manifest /data/edge_manifest.pb \
   --ca-pub /data/ca.pub \
   --identity-key /data/identity.key
@@ -466,7 +466,7 @@ docker run -d \
   -e ANYCAST_CA_PUB="-----BEGIN ML-DSA-87 PUBLIC KEY...-----" \
   -v /etc/anycast:/data \
   ghcr.io/<owner>/anycast-edge:latest \
-  --listen-p2p "/ip4/0.0.0.0/udp/9090/quic-v1" \
+  --listen-p2p "/ip4/0.0.0.0/udp/4002/quic-v1" \
   --manifest /data/edge_manifest.pb \
   --identity-key /data/identity.key
 

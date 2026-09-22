@@ -6,9 +6,15 @@
     flake-utils.url = "github:numtide/flake-utils";
   };
 
-  outputs = { self, nixpkgs, flake-utils }:
+  outputs =
+    {
+      self,
+      nixpkgs,
+      flake-utils,
+    }:
     let
-      perSystem = flake-utils.lib.eachDefaultSystem (system:
+      perSystem = flake-utils.lib.eachDefaultSystem (
+        system:
         let
           pkgs = import nixpkgs {
             inherit system;
@@ -76,7 +82,7 @@
                   "/data" = { };
                 };
                 ExposedPorts = {
-                  "9090/udp" = { };
+                  "4002/udp" = { };
                 };
               };
             };
@@ -117,7 +123,8 @@
         }
       );
     in
-    perSystem // {
+    perSystem
+    // {
       overlays.default = final: prev: {
         anycast-edge = self.packages.${final.system}.anycast-edge;
         anycast-origin = self.packages.${final.system}.anycast-origin;
@@ -127,12 +134,14 @@
       nixosModules = {
         anycast-edge = import ./nix/modules/edge.nix self;
         anycast-origin = import ./nix/modules/origin.nix self;
-        default = { ... }: {
-          imports = [
-            self.nixosModules.anycast-edge
-            self.nixosModules.anycast-origin
-          ];
-        };
+        default =
+          { ... }:
+          {
+            imports = [
+              self.nixosModules.anycast-edge
+              self.nixosModules.anycast-origin
+            ];
+          };
       };
     };
 }

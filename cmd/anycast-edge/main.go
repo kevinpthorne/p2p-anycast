@@ -8,23 +8,23 @@ import (
 	"os/signal"
 	"syscall"
 
-	"google.golang.org/protobuf/proto"
 	"github.com/libp2p/go-libp2p/core/peer"
+	"google.golang.org/protobuf/proto"
 
 	"p2p-anycast/pkg/control/gossip"
 	"p2p-anycast/pkg/control/lease"
-	control "p2p-anycast/pkg/proto/control"
 	"p2p-anycast/pkg/edge/ingress"
 	"p2p-anycast/pkg/pki/keystore"
 	"p2p-anycast/pkg/pki/manifest"
 	"p2p-anycast/pkg/pki/mldsa"
+	control "p2p-anycast/pkg/proto/control"
 	identity "p2p-anycast/pkg/proto/identity"
 	"p2p-anycast/pkg/transport/auth"
 	p2pquic "p2p-anycast/pkg/transport/quic"
 )
 
 func main() {
-	p2pListen := flag.String("listen-p2p", "/ip4/0.0.0.0/udp/9090/quic-v1", "Multiaddr to listen for incoming QUIC connections from Origins")
+	p2pListen := flag.String("listen-p2p", "/ip4/0.0.0.0/udp/4002/quic-v1", "Multiaddr to listen for incoming QUIC connections from Origins")
 	manifestPath := flag.String("manifest", "edge_manifest.pb", "Path to Edge SignedCapabilityManifest (manifest.pb)")
 	caPubPath := flag.String("ca-pub", "ca.pub", "Path to trusted Root CA public key (PEM)")
 	identityKeyPath := flag.String("identity-key", "identity.key", "Path to hardware/filesystem identity key")
