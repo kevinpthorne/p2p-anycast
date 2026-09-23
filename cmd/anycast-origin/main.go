@@ -11,8 +11,6 @@ import (
 	"strings"
 	"syscall"
 
-	"google.golang.org/protobuf/proto"
-
 	"p2p-anycast/pkg/control/gossip"
 	control "p2p-anycast/pkg/proto/control"
 	"p2p-anycast/pkg/origin/dialer"
@@ -22,7 +20,6 @@ import (
 	"p2p-anycast/pkg/pki/keystore"
 	"p2p-anycast/pkg/pki/manifest"
 	"p2p-anycast/pkg/pki/mldsa"
-	identity "p2p-anycast/pkg/proto/identity"
 	"p2p-anycast/pkg/transport/auth"
 	p2pquic "p2p-anycast/pkg/transport/quic"
 )
@@ -71,16 +68,12 @@ func main() {
 		log.Fatalf("[Origin] Failed to load Root CA public key: %v", err)
 	}
 
-	// 3. Load Origin Capability Manifest
-	manifestBytes, err := os.ReadFile(*manifestPath)
+	// 3. Load Origin Capability Manifest (accepts binary .pb or base64 text)
+	signedManifest, err := manifest.LoadManifestFile(*manifestPath)
 	if err != nil {
-		log.Fatalf("[Origin] Failed to read manifest %s: %v", *manifestPath, err)
+		log.Fatalf("[Origin] Failed to load manifest %s: %v", *manifestPath, err)
 	}
-	var signedManifest identity.SignedCapabilityManifest
-	if err := proto.Unmarshal(manifestBytes, &signedManifest); err != nil {
-		log.Fatalf("[Origin] Failed to unmarshal manifest: %v", err)
-	}
-	originClaims, err := manifest.VerifyManifest(&signedManifest, caPub)
+	originClaims, err := manifest.VerifyManifest(signedManifest, caPub)
 	if err != nil {
 		log.Fatalf("[Origin] Origin manifest verification failed: %v", err)
 	}
@@ -154,7 +147,7 @@ func main() {
 	defer h.Close()
 
 	// 6. Setup Auth, Routes, Stream Handler, NAT Table, GossipSub
-	authenticator := auth.NewAuthenticator(h, idKey, &signedManifest, caPub)
+	authenticator := auth.NewAuthenticator(h, idKey, signedManifest, caPub)
 	routes := dispatch.NewTable()
 	_ = stream.NewHandler(h, originMasterKey, routes)
 	natTable := nat.NewTable(ctx, h, originMasterKey, routes)

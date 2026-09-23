@@ -14,6 +14,14 @@ let
   effectiveConfigFile = if cfg.configFile != null
                         then cfg.configFile
                         else generatedConfigFile;
+
+  effectiveManifest =
+    if cfg.manifestKey != null then
+      pkgs.writeText "manifest.pb" cfg.manifestKey
+    else if cfg.manifest != null then
+      cfg.manifest
+    else
+      throw "services.anycast-origin: Either 'manifest' or 'manifestKey' must be specified.";
 in
 {
   options.services.anycast-origin = {
@@ -98,8 +106,15 @@ in
     };
 
     manifest = lib.mkOption {
-      type = lib.types.path;
-      description = "Path to Origin SignedCapabilityManifest (origin_manifest.pb).";
+      type = lib.types.nullOr lib.types.path;
+      default = null;
+      description = "Path to Origin SignedCapabilityManifest file (binary .pb or base64 text). Mutually exclusive with manifestKey.";
+    };
+
+    manifestKey = lib.mkOption {
+      type = lib.types.nullOr lib.types.lines;
+      default = null;
+      description = "Inline base64-encoded SignedCapabilityManifest string. Mutually exclusive with manifest.";
     };
 
     caPub = lib.mkOption {
@@ -138,7 +153,7 @@ in
         ExecStart = lib.concatStringsSep " " ([
           "${cfg.package}/bin/anycast-origin"
           "--config" (lib.escapeShellArg effectiveConfigFile)
-          "--manifest" (lib.escapeShellArg cfg.manifest)
+          "--manifest" (lib.escapeShellArg effectiveManifest)
           "--ca-pub" (lib.escapeShellArg cfg.caPub)
           "--identity-key" (lib.escapeShellArg cfg.identityKey)
         ] ++ map lib.escapeShellArg cfg.extraArgs);

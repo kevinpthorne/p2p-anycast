@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -103,7 +104,8 @@ func cmdSign(args []string) {
 	caPrivPath := fs.String("ca-priv", "ca.priv", "Path to ca.priv")
 	caPubPath := fs.String("ca-pub", "ca.pub", "Path to ca.pub")
 	policyPath := fs.String("policy", "policy.json", "Path to policy JSON file")
-	outFile := fs.String("out", "manifest.pb", "Path to output manifest.pb")
+	outFile := fs.String("out", "manifest.pb", "Path to output manifest file")
+	format := fs.String("format", "b64", "Output format: b64 (base64 text, default) or pb (raw binary)")
 	_ = fs.Parse(args)
 
 	// Load CA Private Key
@@ -207,7 +209,15 @@ func cmdSign(args []string) {
 		os.Exit(1)
 	}
 
-	if err := os.WriteFile(*outFile, manifestBytes, 0644); err != nil {
+	var outBytes []byte
+	if *format == "pb" {
+		outBytes = manifestBytes
+	} else {
+		encoded := base64.StdEncoding.EncodeToString(manifestBytes)
+		outBytes = []byte(encoded + "\n")
+	}
+
+	if err := os.WriteFile(*outFile, outBytes, 0644); err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to write %s: %v\n", *outFile, err)
 		os.Exit(1)
 	}

@@ -2,9 +2,12 @@ package manifest
 
 import (
 	"crypto/sha256"
+	"encoding/base64"
 	"errors"
 	"fmt"
+	"os"
 	"path"
+	"strings"
 	"time"
 
 	"github.com/cloudflare/circl/sign/mldsa/mldsa87"
@@ -56,6 +59,49 @@ func SignManifest(claims *identity.IdentityClaims, caPriv *mldsa87.PrivateKey, c
 		CaSignature:   sig,
 		CaKeyId:       keyID,
 	}, nil
+}
+
+// LoadManifestFile reads a manifest from a file path.
+// It accepts both raw binary protobuf (.pb) and base64-encoded text (.pb64 or inline string).
+func LoadManifestFile(path string) (*identity.SignedCapabilityManifest, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("reading manifest file %s: %w", path, err)
+	}
+	return LoadManifest(data)
+}
+
+// LoadManifest decodes a SignedCapabilityManifest from raw bytes.
+// It auto-detects base64-encoded text (strips whitespace first) vs raw binary proto.
+func LoadManifest(data []byte) (*identity.SignedCapabilityManifest, error) {
+	trimmed := strings.TrimSpace(string(data))
+	if isBase64(trimmed) {
+		decoded, err := base64.StdEncoding.DecodeString(trimmed)
+		if err != nil {
+			return nil, fmt.Errorf("base64 decode: %w", err)
+		}
+		data = decoded
+	}
+	var m identity.SignedCapabilityManifest
+	if err := proto.Unmarshal(data, &m); err != nil {
+		return nil, fmt.Errorf("unmarshal manifest: %w", err)
+	}
+	return &m, nil
+}
+
+// isBase64 reports whether s looks like a base64-encoded string
+// (only contains base64 alphabet characters and padding).
+func isBase64(s string) bool {
+	if len(s) == 0 || len(s)%4 != 0 {
+		return false
+	}
+	for _, c := range s {
+		if !((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+			(c >= '0' && c <= '9') || c == '+' || c == '/' || c == '=') {
+			return false
+		}
+	}
+	return true
 }
 
 // VerifyManifest validates the CA signature, CA key ID, and validity window of a SignedCapabilityManifest.

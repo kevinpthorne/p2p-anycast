@@ -9,7 +9,6 @@ import (
 	"syscall"
 
 	"github.com/libp2p/go-libp2p/core/peer"
-	"google.golang.org/protobuf/proto"
 
 	"p2p-anycast/pkg/control/gossip"
 	"p2p-anycast/pkg/control/lease"
@@ -51,16 +50,12 @@ func main() {
 		log.Fatalf("[Edge] Failed to load Root CA public key: %v", err)
 	}
 
-	// 3. Load Edge Capability Manifest
-	manifestBytes, err := os.ReadFile(*manifestPath)
+	// 3. Load Edge Capability Manifest (accepts binary .pb or base64 text)
+	signedManifest, err := manifest.LoadManifestFile(*manifestPath)
 	if err != nil {
-		log.Fatalf("[Edge] Failed to read manifest %s: %v", *manifestPath, err)
+		log.Fatalf("[Edge] Failed to load manifest %s: %v", *manifestPath, err)
 	}
-	var signedManifest identity.SignedCapabilityManifest
-	if err := proto.Unmarshal(manifestBytes, &signedManifest); err != nil {
-		log.Fatalf("[Edge] Failed to unmarshal manifest: %v", err)
-	}
-	edgeClaims, err := manifest.VerifyManifest(&signedManifest, caPub)
+	edgeClaims, err := manifest.VerifyManifest(signedManifest, caPub)
 	if err != nil {
 		log.Fatalf("[Edge] Edge manifest verification failed: %v", err)
 	}
@@ -78,7 +73,7 @@ func main() {
 	}
 
 	// 5. Setup Authentication Protocol (/p2p-anycast/auth/1.0.0)
-	authenticator := auth.NewAuthenticator(h, idKey, &signedManifest, caPub)
+	authenticator := auth.NewAuthenticator(h, idKey, signedManifest, caPub)
 	authenticator.RegisterStreamHandler()
 
 	// 6. Setup Ingress Router & Lease Manager

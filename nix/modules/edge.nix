@@ -33,6 +33,14 @@ let
           cfg.caPub
         else
           throw "services.anycast-edge: Either 'caPub' or 'caPubKey' must be specified.";
+
+      effectiveManifest =
+        if cfg.manifestKey != null then
+          pkgs.writeText "manifest.pb" cfg.manifestKey
+        else if cfg.manifest != null then
+          cfg.manifest
+        else
+          throw "services.anycast-edge: Either 'manifest' or 'manifestKey' must be specified.";
     in
     {
       imports = [
@@ -57,8 +65,15 @@ let
         };
 
         manifest = lib.mkOption {
-          type = lib.types.either lib.types.path lib.types.str;
-          description = "Path to Edge SignedCapabilityManifest (manifest.pb).";
+          type = lib.types.nullOr (lib.types.either lib.types.path lib.types.str);
+          default = null;
+          description = "Path to Edge SignedCapabilityManifest file (binary .pb or base64 text). Mutually exclusive with manifestKey.";
+        };
+
+        manifestKey = lib.mkOption {
+          type = lib.types.nullOr lib.types.lines;
+          default = null;
+          description = "Inline base64-encoded SignedCapabilityManifest string. Mutually exclusive with manifest.";
         };
 
         caPub = lib.mkOption {
@@ -124,7 +139,7 @@ let
                 "--listen-p2p"
                 (lib.escapeShellArg cfg.listenP2P)
                 "--manifest"
-                (lib.escapeShellArg (toString cfg.manifest))
+                (lib.escapeShellArg (toString effectiveManifest))
                 "--ca-pub"
                 (lib.escapeShellArg (toString effectiveCaPub))
                 "--identity-key"
