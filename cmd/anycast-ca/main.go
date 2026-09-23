@@ -17,13 +17,12 @@ import (
 )
 
 type PolicyJSON struct {
-	SerialNumber          uint64                   `json:"serial_number"`
-	SubjectID             string                   `json:"subject_id"`
-	Role                  string                   `json:"role"` // "EDGE_ROUTER" or "ORIGIN_NODE"
-	Libp2PPeerID          string                   `json:"libp2p_peer_id"`
-	SubjectMLDSAPubkeyFile string                  `json:"subject_mldsa_pubkey_file"`
-	ValidityDays          int                      `json:"validity_days"`
-	Capabilities          []ServiceCapabilityJSON  `json:"capabilities"`
+	SerialNumber  uint64                  `json:"serial_number"`
+	SubjectID     string                  `json:"subject_id"`
+	Role          string                  `json:"role"` // "EDGE_ROUTER" or "ORIGIN_NODE"
+	Libp2PPeerID  string                  `json:"libp2p_peer_id"` // Stable Peer ID derived from node's anchor key
+	ValidityDays  int                     `json:"validity_days"`
+	Capabilities  []ServiceCapabilityJSON `json:"capabilities"`
 }
 
 type ServiceCapabilityJSON struct {
@@ -144,20 +143,10 @@ func cmdSign(args []string) {
 		os.Exit(1)
 	}
 
-	// Load Subject Public Key
-	subPubBytes, err := os.ReadFile(pol.SubjectMLDSAPubkeyFile)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error reading subject public key %s: %v\n", pol.SubjectMLDSAPubkeyFile, err)
+	if pol.Libp2PPeerID == "" {
+		fmt.Fprintf(os.Stderr, "Error: libp2p_peer_id is required in policy JSON\n")
+		fmt.Fprintf(os.Stderr, "       Run the node once with --print-peer-id, or compute it from the anchor public key.\n")
 		os.Exit(1)
-	}
-	subPub, err := mldsa.DecodePublicKeyFromPEM(subPubBytes)
-	if err != nil {
-		// Try raw bytes if not PEM
-		subPub, err = mldsa.PublicKeyFromBytes(subPubBytes)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error decoding subject public key: %v\n", err)
-			os.Exit(1)
-		}
 	}
 
 	role := identity.NodeRole_ORIGIN_NODE
@@ -172,14 +161,13 @@ func cmdSign(args []string) {
 	now := time.Now()
 
 	claims := &identity.IdentityClaims{
-		SerialNumber:       pol.SerialNumber,
-		IssuerId:           "MeshCast Root CA",
-		SubjectId:          pol.SubjectID,
-		Role:               role,
-		SubjectMldsaPubkey: mldsa.PublicKeyToBytes(subPub),
-		Libp2PPeerId:       pol.Libp2PPeerID,
-		NotBefore:          now.Add(-1 * time.Hour).Unix(),
-		NotAfter:           now.Add(time.Duration(validityDays) * 24 * time.Hour).Unix(),
+		SerialNumber: pol.SerialNumber,
+		IssuerId:     "MeshCast Root CA",
+		SubjectId:    pol.SubjectID,
+		Role:         role,
+		Libp2PPeerId: pol.Libp2PPeerID,
+		NotBefore:    now.Add(-1 * time.Hour).Unix(),
+		NotAfter:     now.Add(time.Duration(validityDays) * 24 * time.Hour).Unix(),
 	}
 
 	for _, capJSON := range pol.Capabilities {

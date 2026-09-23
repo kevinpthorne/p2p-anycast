@@ -2,7 +2,7 @@
 // versions:
 // 	protoc-gen-go v1.36.12
 // 	protoc        (unknown)
-// source: identity.proto
+// source: proto/identity.proto
 
 package identity
 
@@ -54,11 +54,11 @@ func (x NodeRole) String() string {
 }
 
 func (NodeRole) Descriptor() protoreflect.EnumDescriptor {
-	return file_identity_proto_enumTypes[0].Descriptor()
+	return file_proto_identity_proto_enumTypes[0].Descriptor()
 }
 
 func (NodeRole) Type() protoreflect.EnumType {
-	return &file_identity_proto_enumTypes[0]
+	return &file_proto_identity_proto_enumTypes[0]
 }
 
 func (x NodeRole) Number() protoreflect.EnumNumber {
@@ -67,7 +67,7 @@ func (x NodeRole) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use NodeRole.Descriptor instead.
 func (NodeRole) EnumDescriptor() ([]byte, []int) {
-	return file_identity_proto_rawDescGZIP(), []int{0}
+	return file_proto_identity_proto_rawDescGZIP(), []int{0}
 }
 
 type AuthorizedPolicy int32
@@ -106,11 +106,11 @@ func (x AuthorizedPolicy) String() string {
 }
 
 func (AuthorizedPolicy) Descriptor() protoreflect.EnumDescriptor {
-	return file_identity_proto_enumTypes[1].Descriptor()
+	return file_proto_identity_proto_enumTypes[1].Descriptor()
 }
 
 func (AuthorizedPolicy) Type() protoreflect.EnumType {
-	return &file_identity_proto_enumTypes[1]
+	return &file_proto_identity_proto_enumTypes[1]
 }
 
 func (x AuthorizedPolicy) Number() protoreflect.EnumNumber {
@@ -119,7 +119,7 @@ func (x AuthorizedPolicy) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use AuthorizedPolicy.Descriptor instead.
 func (AuthorizedPolicy) EnumDescriptor() ([]byte, []int) {
-	return file_identity_proto_rawDescGZIP(), []int{1}
+	return file_proto_identity_proto_rawDescGZIP(), []int{1}
 }
 
 type PortRange struct {
@@ -132,7 +132,7 @@ type PortRange struct {
 
 func (x *PortRange) Reset() {
 	*x = PortRange{}
-	mi := &file_identity_proto_msgTypes[0]
+	mi := &file_proto_identity_proto_msgTypes[0]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -144,7 +144,7 @@ func (x *PortRange) String() string {
 func (*PortRange) ProtoMessage() {}
 
 func (x *PortRange) ProtoReflect() protoreflect.Message {
-	mi := &file_identity_proto_msgTypes[0]
+	mi := &file_proto_identity_proto_msgTypes[0]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -157,7 +157,7 @@ func (x *PortRange) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PortRange.ProtoReflect.Descriptor instead.
 func (*PortRange) Descriptor() ([]byte, []int) {
-	return file_identity_proto_rawDescGZIP(), []int{0}
+	return file_proto_identity_proto_rawDescGZIP(), []int{0}
 }
 
 func (x *PortRange) GetStart() uint32 {
@@ -185,7 +185,7 @@ type ServiceCapability struct {
 
 func (x *ServiceCapability) Reset() {
 	*x = ServiceCapability{}
-	mi := &file_identity_proto_msgTypes[1]
+	mi := &file_proto_identity_proto_msgTypes[1]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -197,7 +197,7 @@ func (x *ServiceCapability) String() string {
 func (*ServiceCapability) ProtoMessage() {}
 
 func (x *ServiceCapability) ProtoReflect() protoreflect.Message {
-	mi := &file_identity_proto_msgTypes[1]
+	mi := &file_proto_identity_proto_msgTypes[1]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -210,7 +210,7 @@ func (x *ServiceCapability) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ServiceCapability.ProtoReflect.Descriptor instead.
 func (*ServiceCapability) Descriptor() ([]byte, []int) {
-	return file_identity_proto_rawDescGZIP(), []int{1}
+	return file_proto_identity_proto_rawDescGZIP(), []int{1}
 }
 
 func (x *ServiceCapability) GetServicePattern() string {
@@ -235,23 +235,23 @@ func (x *ServiceCapability) GetAllowedPorts() []*PortRange {
 }
 
 type IdentityClaims struct {
-	state              protoimpl.MessageState `protogen:"open.v1"`
-	SerialNumber       uint64                 `protobuf:"varint,1,opt,name=serial_number,json=serialNumber,proto3" json:"serial_number,omitempty"`
-	IssuerId           string                 `protobuf:"bytes,2,opt,name=issuer_id,json=issuerId,proto3" json:"issuer_id,omitempty"`
-	SubjectId          string                 `protobuf:"bytes,3,opt,name=subject_id,json=subjectId,proto3" json:"subject_id,omitempty"`
-	Role               NodeRole               `protobuf:"varint,4,opt,name=role,proto3,enum=p2panycast.identity.v1.NodeRole" json:"role,omitempty"`
-	SubjectMldsaPubkey []byte                 `protobuf:"bytes,5,opt,name=subject_mldsa_pubkey,json=subjectMldsaPubkey,proto3" json:"subject_mldsa_pubkey,omitempty"` // 2592 bytes (ML-DSA-87)
-	Libp2PPeerId       string                 `protobuf:"bytes,6,opt,name=libp2p_peer_id,json=libp2pPeerId,proto3" json:"libp2p_peer_id,omitempty"`                   // Base58-encoded Peer ID
-	NotBefore          int64                  `protobuf:"varint,7,opt,name=not_before,json=notBefore,proto3" json:"not_before,omitempty"`                             // Unix timestamp (seconds)
-	NotAfter           int64                  `protobuf:"varint,8,opt,name=not_after,json=notAfter,proto3" json:"not_after,omitempty"`                                // Unix timestamp (seconds)
-	Capabilities       []*ServiceCapability   `protobuf:"bytes,9,rep,name=capabilities,proto3" json:"capabilities,omitempty"`
-	unknownFields      protoimpl.UnknownFields
-	sizeCache          protoimpl.SizeCache
+	state        protoimpl.MessageState `protogen:"open.v1"`
+	SerialNumber uint64                 `protobuf:"varint,1,opt,name=serial_number,json=serialNumber,proto3" json:"serial_number,omitempty"`
+	IssuerId     string                 `protobuf:"bytes,2,opt,name=issuer_id,json=issuerId,proto3" json:"issuer_id,omitempty"`
+	SubjectId    string                 `protobuf:"bytes,3,opt,name=subject_id,json=subjectId,proto3" json:"subject_id,omitempty"`
+	Role         NodeRole               `protobuf:"varint,4,opt,name=role,proto3,enum=p2panycast.identity.v1.NodeRole" json:"role,omitempty"`
+	// field 5 reserved (was subject_mldsa_pubkey)
+	Libp2PPeerId  string               `protobuf:"bytes,6,opt,name=libp2p_peer_id,json=libp2pPeerId,proto3" json:"libp2p_peer_id,omitempty"` // Base58-encoded libp2p Peer ID (derived from node's anchor key)
+	NotBefore     int64                `protobuf:"varint,7,opt,name=not_before,json=notBefore,proto3" json:"not_before,omitempty"`           // Unix timestamp (seconds)
+	NotAfter      int64                `protobuf:"varint,8,opt,name=not_after,json=notAfter,proto3" json:"not_after,omitempty"`              // Unix timestamp (seconds)
+	Capabilities  []*ServiceCapability `protobuf:"bytes,9,rep,name=capabilities,proto3" json:"capabilities,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *IdentityClaims) Reset() {
 	*x = IdentityClaims{}
-	mi := &file_identity_proto_msgTypes[2]
+	mi := &file_proto_identity_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -263,7 +263,7 @@ func (x *IdentityClaims) String() string {
 func (*IdentityClaims) ProtoMessage() {}
 
 func (x *IdentityClaims) ProtoReflect() protoreflect.Message {
-	mi := &file_identity_proto_msgTypes[2]
+	mi := &file_proto_identity_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -276,7 +276,7 @@ func (x *IdentityClaims) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use IdentityClaims.ProtoReflect.Descriptor instead.
 func (*IdentityClaims) Descriptor() ([]byte, []int) {
-	return file_identity_proto_rawDescGZIP(), []int{2}
+	return file_proto_identity_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *IdentityClaims) GetSerialNumber() uint64 {
@@ -305,13 +305,6 @@ func (x *IdentityClaims) GetRole() NodeRole {
 		return x.Role
 	}
 	return NodeRole_ROLE_UNSPECIFIED
-}
-
-func (x *IdentityClaims) GetSubjectMldsaPubkey() []byte {
-	if x != nil {
-		return x.SubjectMldsaPubkey
-	}
-	return nil
 }
 
 func (x *IdentityClaims) GetLibp2PPeerId() string {
@@ -345,7 +338,7 @@ func (x *IdentityClaims) GetCapabilities() []*ServiceCapability {
 type SignedCapabilityManifest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	ClaimsPayload []byte                 `protobuf:"bytes,1,opt,name=claims_payload,json=claimsPayload,proto3" json:"claims_payload,omitempty"` // Deterministic Protobuf bytes of IdentityClaims
-	CaSignature   []byte                 `protobuf:"bytes,2,opt,name=ca_signature,json=caSignature,proto3" json:"ca_signature,omitempty"`       // 4627 bytes (ML-DSA-87 signature from Root CA)
+	CaSignature   []byte                 `protobuf:"bytes,2,opt,name=ca_signature,json=caSignature,proto3" json:"ca_signature,omitempty"`       // ML-DSA-87 signature from Root CA
 	CaKeyId       []byte                 `protobuf:"bytes,3,opt,name=ca_key_id,json=caKeyId,proto3" json:"ca_key_id,omitempty"`                 // 32-byte SHA-256 hash of CA pubkey
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -353,7 +346,7 @@ type SignedCapabilityManifest struct {
 
 func (x *SignedCapabilityManifest) Reset() {
 	*x = SignedCapabilityManifest{}
-	mi := &file_identity_proto_msgTypes[3]
+	mi := &file_proto_identity_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -365,7 +358,7 @@ func (x *SignedCapabilityManifest) String() string {
 func (*SignedCapabilityManifest) ProtoMessage() {}
 
 func (x *SignedCapabilityManifest) ProtoReflect() protoreflect.Message {
-	mi := &file_identity_proto_msgTypes[3]
+	mi := &file_proto_identity_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -378,7 +371,7 @@ func (x *SignedCapabilityManifest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SignedCapabilityManifest.ProtoReflect.Descriptor instead.
 func (*SignedCapabilityManifest) Descriptor() ([]byte, []int) {
-	return file_identity_proto_rawDescGZIP(), []int{3}
+	return file_proto_identity_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *SignedCapabilityManifest) GetClaimsPayload() []byte {
@@ -402,17 +395,17 @@ func (x *SignedCapabilityManifest) GetCaKeyId() []byte {
 	return nil
 }
 
+// AuthHello is sent by the connecting node (Origin) to open mutual auth.
 type AuthHello struct {
 	state         protoimpl.MessageState    `protogen:"open.v1"`
-	NonceA        []byte                    `protobuf:"bytes,1,opt,name=nonce_a,json=nonceA,proto3" json:"nonce_a,omitempty"` // 32 bytes random nonce
-	Manifest      *SignedCapabilityManifest `protobuf:"bytes,2,opt,name=manifest,proto3" json:"manifest,omitempty"`
+	Manifest      *SignedCapabilityManifest `protobuf:"bytes,1,opt,name=manifest,proto3" json:"manifest,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *AuthHello) Reset() {
 	*x = AuthHello{}
-	mi := &file_identity_proto_msgTypes[4]
+	mi := &file_proto_identity_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -424,7 +417,7 @@ func (x *AuthHello) String() string {
 func (*AuthHello) ProtoMessage() {}
 
 func (x *AuthHello) ProtoReflect() protoreflect.Message {
-	mi := &file_identity_proto_msgTypes[4]
+	mi := &file_proto_identity_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -437,14 +430,7 @@ func (x *AuthHello) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AuthHello.ProtoReflect.Descriptor instead.
 func (*AuthHello) Descriptor() ([]byte, []int) {
-	return file_identity_proto_rawDescGZIP(), []int{4}
-}
-
-func (x *AuthHello) GetNonceA() []byte {
-	if x != nil {
-		return x.NonceA
-	}
-	return nil
+	return file_proto_identity_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *AuthHello) GetManifest() *SignedCapabilityManifest {
@@ -454,30 +440,29 @@ func (x *AuthHello) GetManifest() *SignedCapabilityManifest {
 	return nil
 }
 
-type AuthChallenge struct {
+// AuthResponse is sent back by the receiving node (Edge) to complete mutual auth.
+type AuthResponse struct {
 	state         protoimpl.MessageState    `protogen:"open.v1"`
-	NonceB        []byte                    `protobuf:"bytes,1,opt,name=nonce_b,json=nonceB,proto3" json:"nonce_b,omitempty"` // 32 bytes random nonce
-	Manifest      *SignedCapabilityManifest `protobuf:"bytes,2,opt,name=manifest,proto3" json:"manifest,omitempty"`
-	SignatureA    []byte                    `protobuf:"bytes,3,opt,name=signature_a,json=signatureA,proto3" json:"signature_a,omitempty"` // ML-DSA-87 signature over nonce_a
+	Manifest      *SignedCapabilityManifest `protobuf:"bytes,1,opt,name=manifest,proto3" json:"manifest,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *AuthChallenge) Reset() {
-	*x = AuthChallenge{}
-	mi := &file_identity_proto_msgTypes[5]
+func (x *AuthResponse) Reset() {
+	*x = AuthResponse{}
+	mi := &file_proto_identity_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *AuthChallenge) String() string {
+func (x *AuthResponse) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*AuthChallenge) ProtoMessage() {}
+func (*AuthResponse) ProtoMessage() {}
 
-func (x *AuthChallenge) ProtoReflect() protoreflect.Message {
-	mi := &file_identity_proto_msgTypes[5]
+func (x *AuthResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_identity_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -488,95 +473,36 @@ func (x *AuthChallenge) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use AuthChallenge.ProtoReflect.Descriptor instead.
-func (*AuthChallenge) Descriptor() ([]byte, []int) {
-	return file_identity_proto_rawDescGZIP(), []int{5}
+// Deprecated: Use AuthResponse.ProtoReflect.Descriptor instead.
+func (*AuthResponse) Descriptor() ([]byte, []int) {
+	return file_proto_identity_proto_rawDescGZIP(), []int{5}
 }
 
-func (x *AuthChallenge) GetNonceB() []byte {
-	if x != nil {
-		return x.NonceB
-	}
-	return nil
-}
-
-func (x *AuthChallenge) GetManifest() *SignedCapabilityManifest {
+func (x *AuthResponse) GetManifest() *SignedCapabilityManifest {
 	if x != nil {
 		return x.Manifest
 	}
 	return nil
 }
 
-func (x *AuthChallenge) GetSignatureA() []byte {
-	if x != nil {
-		return x.SignatureA
-	}
-	return nil
-}
+var File_proto_identity_proto protoreflect.FileDescriptor
 
-type AuthComplete struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	SignatureB    []byte                 `protobuf:"bytes,1,opt,name=signature_b,json=signatureB,proto3" json:"signature_b,omitempty"` // ML-DSA-87 signature over nonce_b
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *AuthComplete) Reset() {
-	*x = AuthComplete{}
-	mi := &file_identity_proto_msgTypes[6]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *AuthComplete) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*AuthComplete) ProtoMessage() {}
-
-func (x *AuthComplete) ProtoReflect() protoreflect.Message {
-	mi := &file_identity_proto_msgTypes[6]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use AuthComplete.ProtoReflect.Descriptor instead.
-func (*AuthComplete) Descriptor() ([]byte, []int) {
-	return file_identity_proto_rawDescGZIP(), []int{6}
-}
-
-func (x *AuthComplete) GetSignatureB() []byte {
-	if x != nil {
-		return x.SignatureB
-	}
-	return nil
-}
-
-var File_identity_proto protoreflect.FileDescriptor
-
-const file_identity_proto_rawDesc = "" +
+const file_proto_identity_proto_rawDesc = "" +
 	"\n" +
-	"\x0eidentity.proto\x12\x16p2panycast.identity.v1\"3\n" +
+	"\x14proto/identity.proto\x12\x16p2panycast.identity.v1\"3\n" +
 	"\tPortRange\x12\x14\n" +
 	"\x05start\x18\x01 \x01(\rR\x05start\x12\x10\n" +
 	"\x03end\x18\x02 \x01(\rR\x03end\"\xd9\x01\n" +
 	"\x11ServiceCapability\x12'\n" +
 	"\x0fservice_pattern\x18\x01 \x01(\tR\x0eservicePattern\x12S\n" +
 	"\x10allowed_policies\x18\x02 \x03(\x0e2(.p2panycast.identity.v1.AuthorizedPolicyR\x0fallowedPolicies\x12F\n" +
-	"\rallowed_ports\x18\x03 \x03(\v2!.p2panycast.identity.v1.PortRangeR\fallowedPorts\"\x8a\x03\n" +
+	"\rallowed_ports\x18\x03 \x03(\v2!.p2panycast.identity.v1.PortRangeR\fallowedPorts\"\xd8\x02\n" +
 	"\x0eIdentityClaims\x12#\n" +
 	"\rserial_number\x18\x01 \x01(\x04R\fserialNumber\x12\x1b\n" +
 	"\tissuer_id\x18\x02 \x01(\tR\bissuerId\x12\x1d\n" +
 	"\n" +
 	"subject_id\x18\x03 \x01(\tR\tsubjectId\x124\n" +
-	"\x04role\x18\x04 \x01(\x0e2 .p2panycast.identity.v1.NodeRoleR\x04role\x120\n" +
-	"\x14subject_mldsa_pubkey\x18\x05 \x01(\fR\x12subjectMldsaPubkey\x12$\n" +
+	"\x04role\x18\x04 \x01(\x0e2 .p2panycast.identity.v1.NodeRoleR\x04role\x12$\n" +
 	"\x0elibp2p_peer_id\x18\x06 \x01(\tR\flibp2pPeerId\x12\x1d\n" +
 	"\n" +
 	"not_before\x18\a \x01(\x03R\tnotBefore\x12\x1b\n" +
@@ -585,18 +511,11 @@ const file_identity_proto_rawDesc = "" +
 	"\x18SignedCapabilityManifest\x12%\n" +
 	"\x0eclaims_payload\x18\x01 \x01(\fR\rclaimsPayload\x12!\n" +
 	"\fca_signature\x18\x02 \x01(\fR\vcaSignature\x12\x1a\n" +
-	"\tca_key_id\x18\x03 \x01(\fR\acaKeyId\"r\n" +
-	"\tAuthHello\x12\x17\n" +
-	"\anonce_a\x18\x01 \x01(\fR\x06nonceA\x12L\n" +
-	"\bmanifest\x18\x02 \x01(\v20.p2panycast.identity.v1.SignedCapabilityManifestR\bmanifest\"\x97\x01\n" +
-	"\rAuthChallenge\x12\x17\n" +
-	"\anonce_b\x18\x01 \x01(\fR\x06nonceB\x12L\n" +
-	"\bmanifest\x18\x02 \x01(\v20.p2panycast.identity.v1.SignedCapabilityManifestR\bmanifest\x12\x1f\n" +
-	"\vsignature_a\x18\x03 \x01(\fR\n" +
-	"signatureA\"/\n" +
-	"\fAuthComplete\x12\x1f\n" +
-	"\vsignature_b\x18\x01 \x01(\fR\n" +
-	"signatureB*B\n" +
+	"\tca_key_id\x18\x03 \x01(\fR\acaKeyId\"Y\n" +
+	"\tAuthHello\x12L\n" +
+	"\bmanifest\x18\x01 \x01(\v20.p2panycast.identity.v1.SignedCapabilityManifestR\bmanifest\"\\\n" +
+	"\fAuthResponse\x12L\n" +
+	"\bmanifest\x18\x01 \x01(\v20.p2panycast.identity.v1.SignedCapabilityManifestR\bmanifest*B\n" +
 	"\bNodeRole\x12\x14\n" +
 	"\x10ROLE_UNSPECIFIED\x10\x00\x12\x0f\n" +
 	"\vEDGE_ROUTER\x10\x01\x12\x0f\n" +
@@ -608,20 +527,20 @@ const file_identity_proto_rawDesc = "" +
 	"\x17POLICY_STRICT_SINGLETON\x10\x03B)Z'p2p-anycast/pkg/proto/identity;identityb\x06proto3"
 
 var (
-	file_identity_proto_rawDescOnce sync.Once
-	file_identity_proto_rawDescData []byte
+	file_proto_identity_proto_rawDescOnce sync.Once
+	file_proto_identity_proto_rawDescData []byte
 )
 
-func file_identity_proto_rawDescGZIP() []byte {
-	file_identity_proto_rawDescOnce.Do(func() {
-		file_identity_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_identity_proto_rawDesc), len(file_identity_proto_rawDesc)))
+func file_proto_identity_proto_rawDescGZIP() []byte {
+	file_proto_identity_proto_rawDescOnce.Do(func() {
+		file_proto_identity_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_proto_identity_proto_rawDesc), len(file_proto_identity_proto_rawDesc)))
 	})
-	return file_identity_proto_rawDescData
+	return file_proto_identity_proto_rawDescData
 }
 
-var file_identity_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_identity_proto_msgTypes = make([]protoimpl.MessageInfo, 7)
-var file_identity_proto_goTypes = []any{
+var file_proto_identity_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
+var file_proto_identity_proto_msgTypes = make([]protoimpl.MessageInfo, 6)
+var file_proto_identity_proto_goTypes = []any{
 	(NodeRole)(0),                    // 0: p2panycast.identity.v1.NodeRole
 	(AuthorizedPolicy)(0),            // 1: p2panycast.identity.v1.AuthorizedPolicy
 	(*PortRange)(nil),                // 2: p2panycast.identity.v1.PortRange
@@ -629,16 +548,15 @@ var file_identity_proto_goTypes = []any{
 	(*IdentityClaims)(nil),           // 4: p2panycast.identity.v1.IdentityClaims
 	(*SignedCapabilityManifest)(nil), // 5: p2panycast.identity.v1.SignedCapabilityManifest
 	(*AuthHello)(nil),                // 6: p2panycast.identity.v1.AuthHello
-	(*AuthChallenge)(nil),            // 7: p2panycast.identity.v1.AuthChallenge
-	(*AuthComplete)(nil),             // 8: p2panycast.identity.v1.AuthComplete
+	(*AuthResponse)(nil),             // 7: p2panycast.identity.v1.AuthResponse
 }
-var file_identity_proto_depIdxs = []int32{
+var file_proto_identity_proto_depIdxs = []int32{
 	1, // 0: p2panycast.identity.v1.ServiceCapability.allowed_policies:type_name -> p2panycast.identity.v1.AuthorizedPolicy
 	2, // 1: p2panycast.identity.v1.ServiceCapability.allowed_ports:type_name -> p2panycast.identity.v1.PortRange
 	0, // 2: p2panycast.identity.v1.IdentityClaims.role:type_name -> p2panycast.identity.v1.NodeRole
 	3, // 3: p2panycast.identity.v1.IdentityClaims.capabilities:type_name -> p2panycast.identity.v1.ServiceCapability
 	5, // 4: p2panycast.identity.v1.AuthHello.manifest:type_name -> p2panycast.identity.v1.SignedCapabilityManifest
-	5, // 5: p2panycast.identity.v1.AuthChallenge.manifest:type_name -> p2panycast.identity.v1.SignedCapabilityManifest
+	5, // 5: p2panycast.identity.v1.AuthResponse.manifest:type_name -> p2panycast.identity.v1.SignedCapabilityManifest
 	6, // [6:6] is the sub-list for method output_type
 	6, // [6:6] is the sub-list for method input_type
 	6, // [6:6] is the sub-list for extension type_name
@@ -646,27 +564,27 @@ var file_identity_proto_depIdxs = []int32{
 	0, // [0:6] is the sub-list for field type_name
 }
 
-func init() { file_identity_proto_init() }
-func file_identity_proto_init() {
-	if File_identity_proto != nil {
+func init() { file_proto_identity_proto_init() }
+func file_proto_identity_proto_init() {
+	if File_proto_identity_proto != nil {
 		return
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
-			RawDescriptor: unsafe.Slice(unsafe.StringData(file_identity_proto_rawDesc), len(file_identity_proto_rawDesc)),
+			RawDescriptor: unsafe.Slice(unsafe.StringData(file_proto_identity_proto_rawDesc), len(file_proto_identity_proto_rawDesc)),
 			NumEnums:      2,
-			NumMessages:   7,
+			NumMessages:   6,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
-		GoTypes:           file_identity_proto_goTypes,
-		DependencyIndexes: file_identity_proto_depIdxs,
-		EnumInfos:         file_identity_proto_enumTypes,
-		MessageInfos:      file_identity_proto_msgTypes,
+		GoTypes:           file_proto_identity_proto_goTypes,
+		DependencyIndexes: file_proto_identity_proto_depIdxs,
+		EnumInfos:         file_proto_identity_proto_enumTypes,
+		MessageInfos:      file_proto_identity_proto_msgTypes,
 	}.Build()
-	File_identity_proto = out.File
-	file_identity_proto_goTypes = nil
-	file_identity_proto_depIdxs = nil
+	File_proto_identity_proto = out.File
+	file_proto_identity_proto_goTypes = nil
+	file_proto_identity_proto_depIdxs = nil
 }

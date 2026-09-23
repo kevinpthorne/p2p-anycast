@@ -2,7 +2,6 @@ package auth
 
 import (
 	"context"
-	"crypto/rand"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -17,16 +16,12 @@ import (
 
 	"p2p-anycast/pkg/pki/keystore"
 	"p2p-anycast/pkg/pki/manifest"
-	"p2p-anycast/pkg/pki/mldsa"
 	identity "p2p-anycast/pkg/proto/identity"
 )
 
 const (
 	// ProtocolID is the libp2p protocol ID for node authentication.
 	ProtocolID = "/p2p-anycast/auth/1.0.0"
-
-	// NonceSize is 32 bytes for handshake challenges.
-	NonceSize = 32
 
 	// MaxMessageSize limits incoming auth protobuf messages to 64KB.
 	MaxMessageSize = 65536
@@ -37,11 +32,13 @@ var (
 	ErrPeerNotAuthenticated = errors.New("peer is not authenticated")
 	ErrPeerRoleMismatch    = errors.New("peer role mismatch")
 	ErrPeerIDMismatch      = errors.New("peer ID does not match capability manifest")
-	ErrInvalidSignature    = errors.New("invalid handshake challenge signature")
 	ErrMessageTooLarge     = errors.New("protobuf message exceeds max size")
 )
 
-// Authenticator handles mutual post-quantum authentication over /p2p-anycast/auth/1.0.0.
+// Authenticator handles mutual manifest-based authentication over /p2p-anycast/auth/1.0.0.
+// Identity verification is delegated to the libp2p transport (QUIC/Noise), which
+// cryptographically proves peer ownership of the key behind their Peer ID.
+// This layer verifies that each peer holds a CA-signed capability manifest for their Peer ID.
 type Authenticator struct {
 	mu           sync.RWMutex
 	host         host.Host
@@ -52,15 +49,14 @@ type Authenticator struct {
 }
 
 // NewAuthenticator creates a new Authenticator.
-func NewAuthenticator(h host.Host, idKey *keystore.IdentityKey, manifest *identity.SignedCapabilityManifest, trustedCAPub *mldsa87.PublicKey) *Authenticator {
-	a := &Authenticator{
+func NewAuthenticator(h host.Host, idKey *keystore.IdentityKey, mfest *identity.SignedCapabilityManifest, trustedCAPub *mldsa87.PublicKey) *Authenticator {
+	return &Authenticator{
 		host:         h,
 		idKey:        idKey,
-		manifest:     manifest,
+		manifest:     mfest,
 		trustedCAPub: trustedCAPub,
 		sessions:     make(map[peer.ID]*identity.IdentityClaims),
 	}
-	return a
 }
 
 // RegisterStreamHandler registers the protocol stream handler on the libp2p host (Edge side).
@@ -99,67 +95,35 @@ func (a *Authenticator) handleInboundStream(s network.Stream) {
 	a.mu.Unlock()
 }
 
-// serverHandshake handles the Edge side of the mutual challenge-response.
+// serverHandshake handles the Edge side of mutual manifest exchange.
+// The libp2p transport has already proven the remote peer owns the key behind their Peer ID;
+// we simply verify their manifest is CA-signed and matches that Peer ID.
 func (a *Authenticator) serverHandshake(s network.Stream, remotePeer peer.ID) (*identity.IdentityClaims, error) {
-	// 1. Read AuthHello
+	// 1. Read AuthHello from Origin
 	var hello identity.AuthHello
 	if err := readProtoMsg(s, &hello); err != nil {
 		return nil, fmt.Errorf("failed to read AuthHello: %w", err)
 	}
 
-	if len(hello.NonceA) != NonceSize {
-		return nil, fmt.Errorf("%w: invalid NonceA length", ErrHandshakeFailed)
-	}
-
-	// 2. Verify Origin Manifest with Root CA
+	// 2. Verify Origin's manifest with Root CA
 	claimsA, err := manifest.VerifyManifest(hello.Manifest, a.trustedCAPub)
 	if err != nil {
 		return nil, fmt.Errorf("failed to verify Origin manifest: %w", err)
 	}
 
 	if claimsA.Libp2PPeerId != remotePeer.String() {
-		return nil, fmt.Errorf("%w: expected %s, got %s", ErrPeerIDMismatch, remotePeer.String(), claimsA.Libp2PPeerId)
+		return nil, fmt.Errorf("%w: manifest peer ID %s does not match connected peer %s",
+			ErrPeerIDMismatch, claimsA.Libp2PPeerId, remotePeer.String())
 	}
 
 	if claimsA.Role != identity.NodeRole_ORIGIN_NODE {
 		return nil, fmt.Errorf("%w: expected ORIGIN_NODE, got %v", ErrPeerRoleMismatch, claimsA.Role)
 	}
 
-	// 3. Generate NonceB and sign NonceA
-	nonceB := make([]byte, NonceSize)
-	if _, err := io.ReadFull(rand.Reader, nonceB); err != nil {
-		return nil, err
-	}
-
-	sigA, err := a.idKey.SignWithContext(hello.NonceA, mldsa.ContextNodeAuth)
-	if err != nil {
-		return nil, fmt.Errorf("failed to sign NonceA: %w", err)
-	}
-
-	// Send AuthChallenge
-	challenge := &identity.AuthChallenge{
-		NonceB:     nonceB,
-		Manifest:   a.manifest,
-		SignatureA: sigA,
-	}
-	if err := writeProtoMsg(s, challenge); err != nil {
-		return nil, fmt.Errorf("failed to write AuthChallenge: %w", err)
-	}
-
-	// 4. Read AuthComplete
-	var complete identity.AuthComplete
-	if err := readProtoMsg(s, &complete); err != nil {
-		return nil, fmt.Errorf("failed to read AuthComplete: %w", err)
-	}
-
-	// 5. Verify Origin's signature over NonceB
-	originPubKey, err := mldsa.PublicKeyFromBytes(claimsA.SubjectMldsaPubkey)
-	if err != nil {
-		return nil, fmt.Errorf("invalid Origin public key in claims: %w", err)
-	}
-
-	if !mldsa.Verify(originPubKey, nonceB, mldsa.ContextNodeAuth, complete.SignatureB) {
-		return nil, fmt.Errorf("%w: Origin signature over NonceB failed verification", ErrInvalidSignature)
+	// 3. Send AuthResponse with Edge's own manifest
+	resp := &identity.AuthResponse{Manifest: a.manifest}
+	if err := writeProtoMsg(s, resp); err != nil {
+		return nil, fmt.Errorf("failed to write AuthResponse: %w", err)
 	}
 
 	return claimsA, nil
@@ -173,36 +137,22 @@ func (a *Authenticator) AuthenticateOutbound(ctx context.Context, edgePeer peer.
 	}
 	defer s.Close()
 
-	// 1. Generate NonceA and send AuthHello
-	nonceA := make([]byte, NonceSize)
-	if _, err := io.ReadFull(rand.Reader, nonceA); err != nil {
-		s.Reset()
-		return nil, err
-	}
-
-	hello := &identity.AuthHello{
-		NonceA:   nonceA,
-		Manifest: a.manifest,
-	}
+	// 1. Send AuthHello with Origin's manifest
+	hello := &identity.AuthHello{Manifest: a.manifest}
 	if err := writeProtoMsg(s, hello); err != nil {
 		s.Reset()
 		return nil, fmt.Errorf("failed to write AuthHello: %w", err)
 	}
 
-	// 2. Read AuthChallenge
-	var challenge identity.AuthChallenge
-	if err := readProtoMsg(s, &challenge); err != nil {
+	// 2. Read AuthResponse from Edge
+	var resp identity.AuthResponse
+	if err := readProtoMsg(s, &resp); err != nil {
 		s.Reset()
-		return nil, fmt.Errorf("failed to read AuthChallenge: %w", err)
+		return nil, fmt.Errorf("failed to read AuthResponse: %w", err)
 	}
 
-	if len(challenge.NonceB) != NonceSize {
-		s.Reset()
-		return nil, fmt.Errorf("%w: invalid NonceB length", ErrHandshakeFailed)
-	}
-
-	// 3. Verify Edge Manifest with Root CA
-	claimsB, err := manifest.VerifyManifest(challenge.Manifest, a.trustedCAPub)
+	// 3. Verify Edge's manifest with Root CA
+	claimsB, err := manifest.VerifyManifest(resp.Manifest, a.trustedCAPub)
 	if err != nil {
 		s.Reset()
 		return nil, fmt.Errorf("failed to verify Edge manifest: %w", err)
@@ -210,39 +160,13 @@ func (a *Authenticator) AuthenticateOutbound(ctx context.Context, edgePeer peer.
 
 	if claimsB.Libp2PPeerId != edgePeer.String() {
 		s.Reset()
-		return nil, fmt.Errorf("%w: expected %s, got %s", ErrPeerIDMismatch, edgePeer.String(), claimsB.Libp2PPeerId)
+		return nil, fmt.Errorf("%w: manifest peer ID %s does not match connected peer %s",
+			ErrPeerIDMismatch, claimsB.Libp2PPeerId, edgePeer.String())
 	}
 
 	if claimsB.Role != identity.NodeRole_EDGE_ROUTER {
 		s.Reset()
 		return nil, fmt.Errorf("%w: expected EDGE_ROUTER, got %v", ErrPeerRoleMismatch, claimsB.Role)
-	}
-
-	// 4. Verify Edge's signature over NonceA
-	edgePubKey, err := mldsa.PublicKeyFromBytes(claimsB.SubjectMldsaPubkey)
-	if err != nil {
-		s.Reset()
-		return nil, fmt.Errorf("invalid Edge public key in claims: %w", err)
-	}
-
-	if !mldsa.Verify(edgePubKey, nonceA, mldsa.ContextNodeAuth, challenge.SignatureA) {
-		s.Reset()
-		return nil, fmt.Errorf("%w: Edge signature over NonceA failed verification", ErrInvalidSignature)
-	}
-
-	// 5. Sign NonceB and send AuthComplete
-	sigB, err := a.idKey.SignWithContext(challenge.NonceB, mldsa.ContextNodeAuth)
-	if err != nil {
-		s.Reset()
-		return nil, fmt.Errorf("failed to sign NonceB: %w", err)
-	}
-
-	complete := &identity.AuthComplete{
-		SignatureB: sigB,
-	}
-	if err := writeProtoMsg(s, complete); err != nil {
-		s.Reset()
-		return nil, fmt.Errorf("failed to write AuthComplete: %w", err)
 	}
 
 	a.mu.Lock()

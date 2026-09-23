@@ -14,21 +14,15 @@ func TestSignAndVerifyManifest(t *testing.T) {
 		t.Fatalf("failed to generate CA key: %v", err)
 	}
 
-	nodePub, _, err := mldsa.GenerateKey()
-	if err != nil {
-		t.Fatalf("failed to generate node key: %v", err)
-	}
-
 	now := time.Now()
 	claims := &identity.IdentityClaims{
-		SerialNumber:       1,
-		IssuerId:           "root-ca",
-		SubjectId:          "origin-node-01",
-		Role:               identity.NodeRole_ORIGIN_NODE,
-		SubjectMldsaPubkey: mldsa.PublicKeyToBytes(nodePub),
-		Libp2PPeerId:       "12D3KooWSD5...",
-		NotBefore:          now.Add(-1 * time.Hour).Unix(),
-		NotAfter:           now.Add(24 * time.Hour).Unix(),
+		SerialNumber: 1,
+		IssuerId:     "root-ca",
+		SubjectId:    "origin-node-01",
+		Role:         identity.NodeRole_ORIGIN_NODE,
+		Libp2PPeerId: "12D3KooWSD5...",
+		NotBefore:    now.Add(-1 * time.Hour).Unix(),
+		NotAfter:     now.Add(24 * time.Hour).Unix(),
 		Capabilities: []*identity.ServiceCapability{
 			{
 				ServicePattern: "pbx-*",

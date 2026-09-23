@@ -31,8 +31,8 @@ message IdentityClaims {
   string issuer_id = 2;
   string subject_id = 3;
   NodeRole role = 4;
-  bytes subject_mldsa_pubkey = 5;             // 2592 bytes (ML-DSA-87)
-  string libp2p_peer_id = 6;                  // Base58-encoded Peer ID
+  // field 5 reserved (was subject_mldsa_pubkey)
+  string libp2p_peer_id = 6;                  // Base58-encoded libp2p Peer ID (derived from node's anchor key)
   int64 not_before = 7;                       // Unix timestamp (seconds)
   int64 not_after = 8;                        // Unix timestamp (seconds)
   repeated ServiceCapability capabilities = 9;
@@ -40,21 +40,16 @@ message IdentityClaims {
 
 message SignedCapabilityManifest {
   bytes claims_payload = 1;                   // Deterministic Protobuf bytes of IdentityClaims
-  bytes ca_signature = 2;                     // 4627 bytes (ML-DSA-87 signature from Root CA)
+  bytes ca_signature = 2;                     // ML-DSA-87 signature from Root CA
   bytes ca_key_id = 3;                        // 32-byte SHA-256 hash of CA pubkey
 }
 
+// AuthHello is sent by the connecting node (Origin) to open mutual auth.
 message AuthHello {
-  bytes nonce_a = 1;                          // 32 bytes random nonce
-  SignedCapabilityManifest manifest = 2;
+  SignedCapabilityManifest manifest = 1;
 }
 
-message AuthChallenge {
-  bytes nonce_b = 1;                          // 32 bytes random nonce
-  SignedCapabilityManifest manifest = 2;
-  bytes signature_a = 3;                      // ML-DSA-87 signature over nonce_a
-}
-
-message AuthComplete {
-  bytes signature_b = 1;                      // ML-DSA-87 signature over nonce_b
+// AuthResponse is sent back by the receiving node (Edge) to complete mutual auth.
+message AuthResponse {
+  SignedCapabilityManifest manifest = 1;
 }

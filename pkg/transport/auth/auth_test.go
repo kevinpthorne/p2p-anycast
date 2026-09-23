@@ -18,7 +18,7 @@ func TestMutualAuthHandshake(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	// 1. Setup Root CA
+	// 1. Setup Root CA (MLDSA for signing manifests)
 	caPub, caPriv, err := mldsa.GenerateKey()
 	if err != nil {
 		t.Fatalf("failed to generate CA key: %v", err)
@@ -37,14 +37,13 @@ func TestMutualAuthHandshake(t *testing.T) {
 
 	now := time.Now()
 	edgeClaims := &identity.IdentityClaims{
-		SerialNumber:       1,
-		IssuerId:           "root-ca",
-		SubjectId:          "edge-vps-01",
-		Role:               identity.NodeRole_EDGE_ROUTER,
-		SubjectMldsaPubkey: mldsa.PublicKeyToBytes(edgeKey.MLDSAPubKey()),
-		Libp2PPeerId:       edgeHost.ID().String(),
-		NotBefore:          now.Add(-1 * time.Hour).Unix(),
-		NotAfter:           now.Add(24 * time.Hour).Unix(),
+		SerialNumber: 1,
+		IssuerId:     "root-ca",
+		SubjectId:    "edge-vps-01",
+		Role:         identity.NodeRole_EDGE_ROUTER,
+		Libp2PPeerId: edgeHost.ID().String(),
+		NotBefore:    now.Add(-1 * time.Hour).Unix(),
+		NotAfter:     now.Add(24 * time.Hour).Unix(),
 	}
 	edgeManifest, err := manifest.SignManifest(edgeClaims, caPriv, caPub)
 	if err != nil {
@@ -66,14 +65,13 @@ func TestMutualAuthHandshake(t *testing.T) {
 	defer originHost.Close()
 
 	originClaims := &identity.IdentityClaims{
-		SerialNumber:       2,
-		IssuerId:           "root-ca",
-		SubjectId:          "origin-pbx-01",
-		Role:               identity.NodeRole_ORIGIN_NODE,
-		SubjectMldsaPubkey: mldsa.PublicKeyToBytes(originKey.MLDSAPubKey()),
-		Libp2PPeerId:       originHost.ID().String(),
-		NotBefore:          now.Add(-1 * time.Hour).Unix(),
-		NotAfter:           now.Add(24 * time.Hour).Unix(),
+		SerialNumber: 2,
+		IssuerId:     "root-ca",
+		SubjectId:    "origin-pbx-01",
+		Role:         identity.NodeRole_ORIGIN_NODE,
+		Libp2PPeerId: originHost.ID().String(),
+		NotBefore:    now.Add(-1 * time.Hour).Unix(),
+		NotAfter:     now.Add(24 * time.Hour).Unix(),
 	}
 	originManifest, err := manifest.SignManifest(originClaims, caPriv, caPub)
 	if err != nil {

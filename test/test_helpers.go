@@ -39,15 +39,14 @@ func SetupTestPKI(t *testing.T) *TestPKI {
 func (pki *TestPKI) IssueManifest(t *testing.T, subjectID string, role identity.NodeRole, idKey *keystore.IdentityKey, caps []*identity.ServiceCapability) *identity.SignedCapabilityManifest {
 	now := time.Now()
 	claims := &identity.IdentityClaims{
-		SerialNumber:       1,
-		IssuerId:           "Test Root CA",
-		SubjectId:          subjectID,
-		Role:               role,
-		SubjectMldsaPubkey: mldsa.PublicKeyToBytes(idKey.MLDSAPubKey()),
-		Libp2PPeerId:       idKey.PeerID().String(),
-		NotBefore:          now.Add(-1 * time.Hour).Unix(),
-		NotAfter:           now.Add(24 * time.Hour).Unix(),
-		Capabilities:       caps,
+		SerialNumber: 1,
+		IssuerId:     "Test Root CA",
+		SubjectId:    subjectID,
+		Role:         role,
+		Libp2PPeerId: idKey.PeerID().String(),
+		NotBefore:    now.Add(-1 * time.Hour).Unix(),
+		NotAfter:     now.Add(24 * time.Hour).Unix(),
+		Capabilities: caps,
 	}
 
 	signed, err := manifest.SignManifest(claims, pki.CAPriv, pki.CAPub)

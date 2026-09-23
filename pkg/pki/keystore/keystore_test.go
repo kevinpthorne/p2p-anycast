@@ -4,8 +4,6 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-
-	"p2p-anycast/pkg/pki/mldsa"
 )
 
 func TestKeystoreRAMFallback(t *testing.T) {
@@ -22,27 +20,12 @@ func TestKeystoreRAMFallback(t *testing.T) {
 		t.Fatalf("expected tier %s, got %s", TierRAM, idKey.Tier())
 	}
 
-	if idKey.MLDSAPubKey() == nil || idKey.MLDSAPrivKey() == nil {
-		t.Fatal("nil ML-DSA key")
-	}
-
 	if idKey.PeerID() == "" {
 		t.Fatal("empty libp2p Peer ID")
 	}
 
-	if len(idKey.Attestation()) == 0 {
-		t.Fatal("empty hardware cross-binding attestation")
-	}
-
-	// Verify crypto.Signer
-	testMsg := []byte("keystore signer test")
-	sig, err := idKey.SignWithContext(testMsg, mldsa.ContextNodeAuth)
-	if err != nil {
-		t.Fatalf("failed to sign with context: %v", err)
-	}
-
-	if !mldsa.Verify(idKey.MLDSAPubKey(), testMsg, mldsa.ContextNodeAuth, sig) {
-		t.Fatal("signature verification failed")
+	if idKey.Libp2pPrivKey() == nil {
+		t.Fatal("nil libp2p private key")
 	}
 }
 
@@ -89,5 +72,10 @@ func TestKeystoreFilesystem(t *testing.T) {
 
 	if idKey2.Tier() != TierFilesystem {
 		t.Fatalf("expected tier %s, got %s", TierFilesystem, idKey2.Tier())
+	}
+
+	// Peer ID must be stable across loads of the same key
+	if idKey1.PeerID() != idKey2.PeerID() {
+		t.Fatalf("Peer ID changed across reloads: %s != %s", idKey1.PeerID(), idKey2.PeerID())
 	}
 }
