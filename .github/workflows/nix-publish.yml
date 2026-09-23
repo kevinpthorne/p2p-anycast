@@ -30,8 +30,14 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
       - name: Install Nix
         uses: DeterminateSystems/nix-installer-action@v16
+        with:
+          extra-conf: |
+            extra-platforms = aarch64-linux
 
       - name: Setup Magic Nix Cache
         uses: DeterminateSystems/magic-nix-cache-action@v9
