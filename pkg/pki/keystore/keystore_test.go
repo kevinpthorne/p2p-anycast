@@ -190,3 +190,46 @@ func TestGenerateTestIdentity(t *testing.T) {
 		t.Fatal("empty Peer ID")
 	}
 }
+
+func TestKeystoreCredentialsDirectory(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "keystore-cred-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	credDir := filepath.Join(tempDir, "creds")
+	if err := os.MkdirAll(credDir, 0700); err != nil {
+		t.Fatalf("failed to create cred dir: %v", err)
+	}
+
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("failed to generate key: %v", err)
+	}
+	keyBytes, _ := x509.MarshalECPrivateKey(key)
+	pemBytes := pem.EncodeToMemory(&pem.Block{
+		Type:  "EC PRIVATE KEY",
+		Bytes: keyBytes,
+	})
+
+	credKeyPath := filepath.Join(credDir, "identity.key")
+	if err := os.WriteFile(credKeyPath, pemBytes, 0600); err != nil {
+		t.Fatalf("failed to write cred key: %v", err)
+	}
+
+	t.Setenv("CREDENTIALS_DIRECTORY", credDir)
+
+	// Even when pointing to an unreadable or non-existent path, it loads from CREDENTIALS_DIRECTORY
+	idKey, err := LoadOrGenerateIdentity(Options{
+		KeyFilePath: "/var/keys/identity.key",
+		AllowCreate: false,
+	})
+	if err != nil {
+		t.Fatalf("failed to load identity key via CREDENTIALS_DIRECTORY: %v", err)
+	}
+
+	if idKey.PeerID() == "" {
+		t.Fatal("empty Peer ID from credentials directory key")
+	}
+}

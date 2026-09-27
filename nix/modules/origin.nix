@@ -147,6 +147,12 @@ in
       description = "Path to a file containing the Origin master key in hex. Required.";
     };
 
+    extraCredentials = lib.mkOption {
+      type = lib.types.listOf lib.types.str;
+      default = [];
+      description = "Additional systemd LoadCredential specifications to pass to the service.";
+    };
+
     extraArgs = lib.mkOption {
       type = lib.types.listOf lib.types.str;
       default = [];
@@ -188,6 +194,17 @@ in
         DynamicUser = cfg.dynamicUser;
         User = lib.mkIf (!cfg.dynamicUser && cfg.user != null) cfg.user;
         Group = lib.mkIf (!cfg.dynamicUser && cfg.group != null) cfg.group;
+        LoadCredential =
+          cfg.extraCredentials
+          ++ lib.optional (
+            cfg.dynamicUser
+            && (toString cfg.identityKey) != "/var/lib/anycast-origin/identity.key"
+            && !lib.hasPrefix "-----BEGIN" (toString cfg.identityKey)
+          ) "identity.key:${toString cfg.identityKey}"
+          ++ lib.optional (
+            cfg.dynamicUser
+            && cfg.masterKeyFile != null
+          ) "master.key:${toString cfg.masterKeyFile}";
         ProtectSystem = "strict";
         ProtectHome = "read-only";
         PrivateTmp = true;

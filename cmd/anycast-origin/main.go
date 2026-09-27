@@ -9,6 +9,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 
@@ -100,7 +101,22 @@ func main() {
 	if *masterKeyFile != "" {
 		keyBytes, err := os.ReadFile(*masterKeyFile)
 		if err != nil {
-			log.Fatalf("[Origin] Failed to read master key file: %v", err)
+			if credDir := os.Getenv("CREDENTIALS_DIRECTORY"); credDir != "" {
+				candidates := []string{
+					filepath.Join(credDir, filepath.Base(*masterKeyFile)),
+					filepath.Join(credDir, "master.key"),
+				}
+				for _, c := range candidates {
+					if cData, cErr := os.ReadFile(c); cErr == nil {
+						keyBytes = cData
+						err = nil
+						break
+					}
+				}
+			}
+		}
+		if err != nil {
+			log.Fatalf("[Origin] Failed to read master key file %s: %v", *masterKeyFile, err)
 		}
 		envKey = strings.TrimSpace(string(keyBytes))
 	} else if keyEnv := os.Getenv("ORIGIN_MASTER_KEY"); keyEnv != "" {

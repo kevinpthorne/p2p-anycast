@@ -145,6 +145,12 @@ let
           };
         };
 
+        extraCredentials = lib.mkOption {
+          type = lib.types.listOf lib.types.str;
+          default = [ ];
+          description = "Additional systemd LoadCredential specifications to pass to the service.";
+        };
+
         extraArgs = lib.mkOption {
           type = lib.types.listOf lib.types.str;
           default = [ ];
@@ -211,6 +217,13 @@ let
             DynamicUser = cfg.dynamicUser;
             User = lib.mkIf (!cfg.dynamicUser && cfg.user != null) cfg.user;
             Group = lib.mkIf (!cfg.dynamicUser && cfg.group != null) cfg.group;
+            LoadCredential =
+              cfg.extraCredentials
+              ++ lib.optional (
+                cfg.dynamicUser
+                && (toString cfg.identityKey) != "/var/lib/anycast-edge/identity.key"
+                && !lib.hasPrefix "-----BEGIN" (toString cfg.identityKey)
+              ) "identity.key:${toString cfg.identityKey}";
             AmbientCapabilities = [ "CAP_NET_BIND_SERVICE" ] ++ lib.optional cfg.dynamicFirewall.enable "CAP_NET_ADMIN";
             CapabilityBoundingSet = [ "CAP_NET_BIND_SERVICE" ] ++ lib.optional cfg.dynamicFirewall.enable "CAP_NET_ADMIN";
             ProtectSystem = "strict";

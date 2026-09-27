@@ -189,8 +189,24 @@ func tryFilesystem(pathOrPEM string, allowCreate bool) (*ecdsa.PrivateKey, error
 		return parsePrivateKeyPEM(data)
 	}
 
+	// If read failed, check if systemd passed the file via LoadCredential ($CREDENTIALS_DIRECTORY)
+	if credDir := os.Getenv("CREDENTIALS_DIRECTORY"); credDir != "" {
+		candidates := []string{
+			filepath.Join(credDir, filepath.Base(trimmed)),
+			filepath.Join(credDir, "identity.key"),
+		}
+		for _, c := range candidates {
+			if credData, cErr := os.ReadFile(c); cErr == nil {
+				return parsePrivateKeyPEM(credData)
+			}
+		}
+	}
+
 	// File read failed. Only attempt creation if allowCreate is true and file does not exist.
 	if !allowCreate || !errors.Is(err, os.ErrNotExist) {
+		if errors.Is(err, os.ErrPermission) {
+			return nil, fmt.Errorf("reading key file %q: %w (hint: file or directory is owned by root; set dynamicUser = false or use systemd LoadCredential)", trimmed, err)
+		}
 		return nil, fmt.Errorf("reading key file %q: %w", trimmed, err)
 	}
 
