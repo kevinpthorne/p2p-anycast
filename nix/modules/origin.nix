@@ -118,9 +118,27 @@ in
     };
 
     identityKey = lib.mkOption {
-      type = lib.types.str;
+      type = lib.types.either lib.types.path lib.types.str;
       default = "/var/lib/anycast-origin/identity.key";
-      description = "Path to hardware or filesystem identity key.";
+      description = "Path to hardware or filesystem identity key file, or inline PEM private key string.";
+    };
+
+    dynamicUser = lib.mkOption {
+      type = lib.types.bool;
+      default = true;
+      description = "Whether to run the service under a dynamic user. Set to false if reading keys owned by root.";
+    };
+
+    user = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      description = "User to run the daemon as when dynamicUser is false.";
+    };
+
+    group = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      description = "Group to run the daemon as when dynamicUser is false.";
     };
 
     masterKeyFile = lib.mkOption {
@@ -156,7 +174,7 @@ in
           "--config" (lib.escapeShellArg effectiveConfigFile)
           "--manifest" (lib.escapeShellArg effectiveManifest)
           "--ca-pub" (lib.escapeShellArg cfg.caPub)
-          "--identity-key" (lib.escapeShellArg cfg.identityKey)
+          "--identity-key" (lib.escapeShellArg (toString cfg.identityKey))
         ] ++ lib.optional (cfg.masterKeyFile != null) "--master-key-file ${lib.escapeShellArg cfg.masterKeyFile}"
           ++ map lib.escapeShellArg cfg.extraArgs);
 
@@ -167,9 +185,11 @@ in
         LimitNOFILE = 65536;
 
         # Sandboxing
-        DynamicUser = true;
+        DynamicUser = cfg.dynamicUser;
+        User = lib.mkIf (!cfg.dynamicUser && cfg.user != null) cfg.user;
+        Group = lib.mkIf (!cfg.dynamicUser && cfg.group != null) cfg.group;
         ProtectSystem = "strict";
-        ProtectHome = true;
+        ProtectHome = "read-only";
         PrivateTmp = true;
       };
     };

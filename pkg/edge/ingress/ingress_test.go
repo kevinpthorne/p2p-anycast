@@ -37,7 +37,7 @@ func TestEdgeDynamicListenerBinding(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	key, _ := keystore.LoadOrGenerateIdentity(keystore.Options{ForceTier: keystore.TierRAM})
+	key, _ := keystore.GenerateTestIdentity()
 	h, err := p2pquic.NewHost(ctx, key, []string{"/ip4/127.0.0.1/udp/0/quic-v1"})
 	if err != nil {
 		t.Fatalf("failed to create host: %v", err)

@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"flag"
+	"fmt"
 	"log"
 	"os"
 	"os/signal"
@@ -44,15 +45,11 @@ func main() {
 	manifestPath := flag.String("manifest", "origin_manifest.pb", "Path to Origin SignedCapabilityManifest")
 	caPubPath := flag.String("ca-pub", "ca.pub", "Path to trusted Root CA public key (PEM)")
 	identityKeyPath := flag.String("identity-key", "identity.key", "Path to hardware/filesystem identity key")
+	printPeerID := flag.Bool("print-peer-id", false, "Print the libp2p Peer ID derived from the identity key and exit")
 	masterKeyFile := flag.String("master-key-file", "", "Path to file containing Origin 256-bit master key in hex")
 	flag.Parse()
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	log.Printf("[Origin] Starting MeshCast Origin Sidecar...")
-
-	// 1. Load Origin Identity Key
+	// 1. Load Origin Identity Key (TPM2 -> Secure Enclave -> Filesystem)
 	idKey, err := keystore.LoadOrGenerateIdentity(keystore.Options{
 		KeyFilePath: *identityKeyPath,
 		AllowCreate: true,
@@ -60,6 +57,16 @@ func main() {
 	if err != nil {
 		log.Fatalf("[Origin] Failed to load node identity: %v", err)
 	}
+
+	if *printPeerID {
+		fmt.Println(idKey.PeerID().String())
+		return
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	log.Printf("[Origin] Starting MeshCast Origin Sidecar...")
 	log.Printf("[Origin] Loaded identity from %s (Peer ID: %s)", idKey.Tier(), idKey.PeerID())
 
 	// 2. Load Root CA Public Key (from file, inline PEM string, or ANYCAST_CA_PUB env)

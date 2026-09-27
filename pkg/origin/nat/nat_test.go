@@ -43,14 +43,14 @@ func TestStatefulNATTableAndReaping(t *testing.T) {
 	}()
 
 	// 2. Setup Hosts
-	originIdKey, _ := keystore.LoadOrGenerateIdentity(keystore.Options{ForceTier: keystore.TierRAM})
+	originIdKey, _ := keystore.GenerateTestIdentity()
 	originHost, err := p2pquic.NewHost(ctx, originIdKey, []string{"/ip4/127.0.0.1/udp/0/quic-v1"})
 	if err != nil {
 		t.Fatalf("failed to create origin host: %v", err)
 	}
 	defer originHost.Close()
 
-	edgeIdKey, _ := keystore.LoadOrGenerateIdentity(keystore.Options{ForceTier: keystore.TierRAM})
+	edgeIdKey, _ := keystore.GenerateTestIdentity()
 	edgeHost, err := p2pquic.NewHost(ctx, edgeIdKey, []string{"/ip4/127.0.0.1/udp/0/quic-v1"})
 	if err != nil {
 		t.Fatalf("failed to create edge host: %v", err)

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"flag"
+	"fmt"
 	"log"
 	"os"
 	"os/signal"
@@ -28,15 +29,11 @@ func main() {
 	manifestPath := flag.String("manifest", "edge_manifest.pb", "Path to Edge SignedCapabilityManifest (manifest.pb)")
 	caPubPath := flag.String("ca-pub", "ca.pub", "Path to trusted Root CA public key (PEM)")
 	identityKeyPath := flag.String("identity-key", "identity.key", "Path to hardware/filesystem identity key")
+	printPeerID := flag.Bool("print-peer-id", false, "Print the libp2p Peer ID derived from the identity key and exit")
 	firewallBackend := flag.String("firewall", "auto", "Firewall backend for dynamic port opening (auto, iptables, nftables, none)")
 	flag.Parse()
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	log.Printf("[Edge] Starting MeshCast Edge Router...")
-
-	// 1. Load Keystore Identity (TPM2 -> Secure Enclave -> Filesystem -> RAM)
+	// 1. Load Keystore Identity (TPM2 -> Secure Enclave -> Filesystem)
 	idKey, err := keystore.LoadOrGenerateIdentity(keystore.Options{
 		KeyFilePath: *identityKeyPath,
 		AllowCreate: true,
@@ -44,6 +41,16 @@ func main() {
 	if err != nil {
 		log.Fatalf("[Edge] Failed to load node identity: %v", err)
 	}
+
+	if *printPeerID {
+		fmt.Println(idKey.PeerID().String())
+		return
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	log.Printf("[Edge] Starting MeshCast Edge Router...")
 	log.Printf("[Edge] Loaded identity from %s (Peer ID: %s)", idKey.Tier(), idKey.PeerID())
 
 	// 2. Load Trusted Root CA Public Key (from file, inline PEM string, or ANYCAST_CA_PUB env)

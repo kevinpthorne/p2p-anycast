@@ -18,14 +18,14 @@ func TestMeshRegistryGossip(t *testing.T) {
 	defer cancel()
 
 	// 1. Create two hosts
-	key1, _ := keystore.LoadOrGenerateIdentity(keystore.Options{ForceTier: keystore.TierRAM})
+	key1, _ := keystore.GenerateTestIdentity()
 	h1, err := p2pquic.NewHost(ctx, key1, []string{"/ip4/127.0.0.1/udp/0/quic-v1"})
 	if err != nil {
 		t.Fatalf("failed to create host1: %v", err)
 	}
 	defer h1.Close()
 
-	key2, _ := keystore.LoadOrGenerateIdentity(keystore.Options{ForceTier: keystore.TierRAM})
+	key2, _ := keystore.GenerateTestIdentity()
 	h2, err := p2pquic.NewHost(ctx, key2, []string{"/ip4/127.0.0.1/udp/0/quic-v1"})
 	if err != nil {
 		t.Fatalf("failed to create host2: %v", err)

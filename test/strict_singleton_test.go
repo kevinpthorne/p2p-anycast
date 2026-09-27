@@ -35,7 +35,7 @@ func TestStrictSingletonFailClosed(t *testing.T) {
 	defer backendLn.Close()
 
 	// 2. Setup Edge Host
-	edgeKey, _ := keystore.LoadOrGenerateIdentity(keystore.Options{ForceTier: keystore.TierRAM})
+	edgeKey, _ := keystore.GenerateTestIdentity()
 	edgeHost, err := p2pquic.NewHost(ctx, edgeKey, []string{"/ip4/127.0.0.1/udp/0/quic-v1"})
 	if err != nil {
 		t.Fatalf("failed to create edge host: %v", err)
@@ -83,7 +83,7 @@ func TestStrictSingletonFailClosed(t *testing.T) {
 	}
 
 	// 3. Setup Origin 1 (Active Singleton)
-	origin1Key, _ := keystore.LoadOrGenerateIdentity(keystore.Options{ForceTier: keystore.TierRAM})
+	origin1Key, _ := keystore.GenerateTestIdentity()
 	origin1Host, err := p2pquic.NewHost(ctx, origin1Key, []string{"/ip4/127.0.0.1/udp/0/quic-v1"})
 	if err != nil {
 		t.Fatalf("failed to create origin1 host: %v", err)

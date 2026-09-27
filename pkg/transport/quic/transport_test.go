@@ -16,7 +16,7 @@ func TestQUICHostAndDatagrams(t *testing.T) {
 	defer cancel()
 
 	// 1. Create two hosts
-	key1, err := keystore.LoadOrGenerateIdentity(keystore.Options{ForceTier: keystore.TierRAM})
+	key1, err := keystore.GenerateTestIdentity()
 	if err != nil {
 		t.Fatalf("failed to generate key1: %v", err)
 	}
@@ -26,7 +26,7 @@ func TestQUICHostAndDatagrams(t *testing.T) {
 	}
 	defer h1.Close()
 
-	key2, err := keystore.LoadOrGenerateIdentity(keystore.Options{ForceTier: keystore.TierRAM})
+	key2, err := keystore.GenerateTestIdentity()
 	if err != nil {
 		t.Fatalf("failed to generate key2: %v", err)
 	}

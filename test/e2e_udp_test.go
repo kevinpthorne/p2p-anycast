@@ -34,7 +34,7 @@ func TestE2EUDPSymmetricNATAndVoIP(t *testing.T) {
 	defer udpBackendConn.Close()
 
 	// 2. Setup Edge Host
-	edgeKey, _ := keystore.LoadOrGenerateIdentity(keystore.Options{ForceTier: keystore.TierRAM})
+	edgeKey, _ := keystore.GenerateTestIdentity()
 	edgeHost, err := p2pquic.NewHost(ctx, edgeKey, []string{"/ip4/127.0.0.1/udp/0/quic-v1"})
 	if err != nil {
 		t.Fatalf("failed to create edge host: %v", err)
@@ -82,7 +82,7 @@ func TestE2EUDPSymmetricNATAndVoIP(t *testing.T) {
 	}
 
 	// 3. Setup Origin Host
-	originKey, _ := keystore.LoadOrGenerateIdentity(keystore.Options{ForceTier: keystore.TierRAM})
+	originKey, _ := keystore.GenerateTestIdentity()
 	originHost, err := p2pquic.NewHost(ctx, originKey, []string{"/ip4/127.0.0.1/udp/0/quic-v1"})
 	if err != nil {
 		t.Fatalf("failed to create origin host: %v", err)

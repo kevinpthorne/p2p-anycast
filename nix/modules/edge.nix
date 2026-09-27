@@ -89,9 +89,27 @@ let
         };
 
         identityKey = lib.mkOption {
-          type = lib.types.str;
+          type = lib.types.either lib.types.path lib.types.str;
           default = "/var/lib/anycast-edge/identity.key";
-          description = "Path to hardware or filesystem identity key.";
+          description = "Path to hardware or filesystem identity key file, or inline PEM private key string.";
+        };
+
+        dynamicUser = lib.mkOption {
+          type = lib.types.bool;
+          default = true;
+          description = "Whether to run the service under a dynamic user. Set to false if reading keys owned by root.";
+        };
+
+        user = lib.mkOption {
+          type = lib.types.nullOr lib.types.str;
+          default = null;
+          description = "User to run the daemon as when dynamicUser is false.";
+        };
+
+        group = lib.mkOption {
+          type = lib.types.nullOr lib.types.str;
+          default = null;
+          description = "Group to run the daemon as when dynamicUser is false.";
         };
 
         openFirewall = lib.mkOption {
@@ -171,7 +189,7 @@ let
                 "--ca-pub"
                 (lib.escapeShellArg (toString effectiveCaPub))
                 "--identity-key"
-                (lib.escapeShellArg cfg.identityKey)
+                (lib.escapeShellArg (toString cfg.identityKey))
                 "--firewall"
                 (lib.escapeShellArg (if cfg.dynamicFirewall.enable then cfg.dynamicFirewall.backend else "none"))
               ]
@@ -190,11 +208,13 @@ let
             ];
 
             # Sandboxing and capabilities
-            DynamicUser = true;
+            DynamicUser = cfg.dynamicUser;
+            User = lib.mkIf (!cfg.dynamicUser && cfg.user != null) cfg.user;
+            Group = lib.mkIf (!cfg.dynamicUser && cfg.group != null) cfg.group;
             AmbientCapabilities = [ "CAP_NET_BIND_SERVICE" ] ++ lib.optional cfg.dynamicFirewall.enable "CAP_NET_ADMIN";
             CapabilityBoundingSet = [ "CAP_NET_BIND_SERVICE" ] ++ lib.optional cfg.dynamicFirewall.enable "CAP_NET_ADMIN";
             ProtectSystem = "strict";
-            ProtectHome = true;
+            ProtectHome = "read-only";
             PrivateTmp = true;
           };
         };

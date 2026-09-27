@@ -25,7 +25,7 @@ func TestMutualAuthHandshake(t *testing.T) {
 	}
 
 	// 2. Setup Edge
-	edgeKey, err := keystore.LoadOrGenerateIdentity(keystore.Options{ForceTier: keystore.TierRAM})
+	edgeKey, err := keystore.GenerateTestIdentity()
 	if err != nil {
 		t.Fatalf("failed to generate edge key: %v", err)
 	}
@@ -54,7 +54,7 @@ func TestMutualAuthHandshake(t *testing.T) {
 	edgeAuth.RegisterStreamHandler()
 
 	// 3. Setup Origin
-	originKey, err := keystore.LoadOrGenerateIdentity(keystore.Options{ForceTier: keystore.TierRAM})
+	originKey, err := keystore.GenerateTestIdentity()
 	if err != nil {
 		t.Fatalf("failed to generate origin key: %v", err)
 	}

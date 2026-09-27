@@ -43,8 +43,8 @@ The design enforces strict constraints that guarantee portability, zero privileg
 6. **Post-Quantum Root CA (ML-DSA-87):** The Root CA uses FIPS 204 ML-DSA-87 to sign capability manifests with an explicit domain-separated context string:
    - `p2p-anycast:ca:manifest:v1` — Root CA manifest signing.
 7. **Tiered Hardware Keystore:** Node identity follows a strict anchor waterfall, using ECDSA P-256 as the base key type:
-   $$\text{TPM 2.0} \longrightarrow \text{Apple Secure Enclave} \longrightarrow \text{Filesystem Key} \longrightarrow \text{RAM}$$
-   The anchor key is used directly as the libp2p identity, so the node's **Peer ID is stable and deterministically derived from the hardware key** — no ephemeral keys, no bootstrapping problem.
+   $$\text{TPM 2.0} \longrightarrow \text{Apple Secure Enclave} \longrightarrow \text{Filesystem Key}$$
+   The anchor key is used directly as the libp2p identity, so the node's **Peer ID is stable and deterministically derived from the hardware key** — no ephemeral keys, no bootstrapping problem. Nodes fail fast if no anchor key can be loaded, preventing configuration errors from masquerading as silent auth failures.
 8. **Manifest Auth via libp2p Transport:** Node identity is verified by the libp2p QUIC/Noise transport, which cryptographically proves peer ownership of the key behind their Peer ID. The application-layer auth protocol (`/p2p-anycast/auth/1.0.0`) then verifies that each peer holds a CA-signed capability manifest matching that Peer ID. No separate challenge-response signing is required.
 9. **Static Route Table with Cluster FQDN Support:** The Origin sidecar maintains a static route table that resolves target endpoints dynamically, supporting localhost (`127.0.0.1:port`), Unix domain sockets (`unix:///run/app.sock`), and internal Kubernetes/cluster DNS FQDNs (e.g. `minecraft.minecraft.svc.cluster.local:25565`).
 
@@ -167,7 +167,7 @@ p2p-anycast/
 ├── pkg/
 │   ├── pki/
 │   │   ├── mldsa/        # FIPS 204 ML-DSA-87 wrapper (Root CA signing only)
-│   │   ├── keystore/     # Hardware anchor key loader (TPM2, Secure Enclave, File, RAM)
+│   │   ├── keystore/     # Hardware anchor key loader (TPM2, Secure Enclave, Filesystem)
 │   │   └── manifest/     # Protobuf signing, verification, and base64/binary loading
 │   ├── proto/
 │   │   ├── identity/     # Generated Protobuf Go code for identity.proto
@@ -526,7 +526,8 @@ docker run -d \
   --config /data/origin_config.json \
   --manifest /data/origin_manifest.pb \
   --ca-pub /data/ca.pub \
-  --identity-key /data/identity.key
+  --identity-key /data/identity.key \
+  --master-key-file /data/origin_master.key
 ```
 
 Build OCI images locally with Nix:
