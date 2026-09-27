@@ -27,7 +27,7 @@
           packages = {
             anycast-edge = pkgs.buildGoModule {
               pname = "anycast-edge";
-              version = "0.3.0";
+              version = "0.3.1";
               src = ./.;
               subPackages = [ "cmd/anycast-edge" ];
               vendorHash = null;
@@ -42,7 +42,7 @@
 
             anycast-origin = pkgs.buildGoModule {
               pname = "anycast-origin";
-              version = "0.3.0";
+              version = "0.3.1";
               src = ./.;
               subPackages = [ "cmd/anycast-origin" ];
               vendorHash = null;
@@ -57,7 +57,7 @@
 
             anycast-ca = pkgs.buildGoModule {
               pname = "anycast-ca";
-              version = "0.3.0";
+              version = "0.3.1";
               src = ./.;
               subPackages = [ "cmd/anycast-ca" ];
               vendorHash = null;

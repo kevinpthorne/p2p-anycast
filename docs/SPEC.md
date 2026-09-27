@@ -52,7 +52,7 @@ Nodes must implement the standard Go `crypto.Signer` interface, loading their pr
 
 1. **Tier 1A (Linux/Windows):** TPM 2.0 SRK (Storage Root Key) via `/dev/tpmrm0` or TBS.
 2. **Tier 1B (macOS):** Apple Secure Enclave (`kSecAttrTokenIDSecureEnclave`).
-3. **Tier 2:** Local filesystem key (`identity.key` / PKCS#8 or SEC1 PEM, or inline string). If no hardware anchor is available and no filesystem key can be found, the node fails fast with an explicit error to prevent silent failure with PKI manifests.
+3. **Tier 2:** Local filesystem key (`identity.key` / libp2p protobuf format, base64, or legacy SEC1/PKCS#8 PEM). Only generated if hardware anchors (TPM 2.0 and Secure Enclave) fail or are unavailable. If no hardware anchor is available and no filesystem key can be found/created, the node fails fast with an explicit error to prevent silent failure with PKI manifests.
 
 Because current hardware chips only support classical curves (ECDSA P-256), the hardware key acts as the node's anchor, which is cross-bound to an ephemeral FIPS 204 ML-DSA-87 keypair generated on boot.
 

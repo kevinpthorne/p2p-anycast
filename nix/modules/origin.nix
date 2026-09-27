@@ -120,7 +120,7 @@ in
     identityKey = lib.mkOption {
       type = lib.types.either lib.types.path lib.types.str;
       default = "/var/lib/anycast-origin/identity.key";
-      description = "Path to hardware or filesystem identity key file, or inline PEM private key string.";
+      description = "Path to hardware or filesystem identity key file, or inline private key string (base64 or PEM).";
     };
 
     dynamicUser = lib.mkOption {
@@ -200,6 +200,7 @@ in
             cfg.dynamicUser
             && (toString cfg.identityKey) != "/var/lib/anycast-origin/identity.key"
             && !lib.hasPrefix "-----BEGIN" (toString cfg.identityKey)
+            && !lib.hasPrefix "CAES" (toString cfg.identityKey)
           ) "identity.key:${toString cfg.identityKey}"
           ++ lib.optional (
             cfg.dynamicUser

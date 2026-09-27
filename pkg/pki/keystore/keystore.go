@@ -2,9 +2,8 @@ package keystore
 
 import (
 	"crypto/ecdsa"
-	"crypto/elliptic"
-	"crypto/rand"
 	"crypto/x509"
+	"encoding/base64"
 	"encoding/pem"
 	"errors"
 	"fmt"
@@ -27,7 +26,7 @@ const (
 )
 
 // IdentityKey encapsulates a node's cryptographic identity.
-// The anchor (TPM/SE/file ECDSA P-256 key) is the authoritative persistent identity.
+// The anchor (TPM/SE hardware key or filesystem libp2p key) is the authoritative persistent identity.
 // The libp2p Peer ID is derived directly from the anchor public key and is therefore
 // stable across reboots.
 type IdentityKey struct {
@@ -53,7 +52,7 @@ func (k *IdentityKey) PeerID() peer.ID {
 
 // Options configures the keystore loader.
 type Options struct {
-	KeyFilePath string       // File path or inline PEM private key string
+	KeyFilePath string       // File path or inline private key string (protobuf base64 or PEM)
 	AllowCreate bool         // If true and KeyFilePath does not exist, generate and write a new key
 	ForceTier   KeystoreTier // If set, only attempt this tier (useful for testing)
 }
@@ -61,29 +60,38 @@ type Options struct {
 // LoadOrGenerateIdentity loads or generates a node identity following the anchor waterfall:
 // Tier 1A (TPM 2.0) -> Tier 1B (Apple Secure Enclave) -> Tier 2 (Filesystem).
 //
-// If KeyFilePath is specified, it strictly attempts to load/create the key from that path
-// or inline PEM string, returning an error immediately if it cannot be loaded.
+// Hardware anchors (TPM / SE) are always probed first. The filesystem key file is only
+// loaded or generated if hardware anchors are unavailable or fail.
 //
-// The anchor ECDSA P-256 key is used directly as the libp2p identity, so the Peer ID
-// is stable and knowable from the public key alone — no ephemeral keys.
+// If ForceTier is specified, only that specific tier is attempted.
+// If KeyFilePath contains inline key data, it loads directly from the inline data.
 func LoadOrGenerateIdentity(opts Options) (*IdentityKey, error) {
-	// If KeyFilePath is explicitly specified, or ForceTier is Filesystem, load directly from filesystem / inline PEM.
-	if opts.KeyFilePath != "" || opts.ForceTier == TierFilesystem {
+	// If an inline key is provided directly in KeyFilePath, load it immediately as Filesystem tier.
+	if opts.KeyFilePath != "" && isInlineKey(opts.KeyFilePath) {
+		priv, err := tryFilesystem(opts.KeyFilePath, false)
+		if err != nil {
+			return nil, fmt.Errorf("failed to load inline identity key: %w", err)
+		}
+		return buildIdentity(priv, TierFilesystem)
+	}
+
+	// If TierFilesystem is explicitly forced, bypass hardware tiers and go straight to filesystem.
+	if opts.ForceTier == TierFilesystem {
 		keyPath := opts.KeyFilePath
 		if keyPath == "" {
 			keyPath = "identity.key"
 		}
-		fileKey, err := tryFilesystem(keyPath, opts.AllowCreate)
+		priv, err := tryFilesystem(keyPath, opts.AllowCreate)
 		if err != nil {
 			return nil, fmt.Errorf("failed to load identity key (%s): %w", keyPath, err)
 		}
-		return buildIdentity(fileKey, TierFilesystem)
+		return buildIdentity(priv, TierFilesystem)
 	}
 
 	// 1. Tier 1A: TPM 2.0
 	if opts.ForceTier == "" || opts.ForceTier == TierTPM2 {
 		if tpmKey, err := tryTPM2(); err == nil && tpmKey != nil {
-			return buildIdentity(tpmKey, TierTPM2)
+			return buildIdentityFromECDSA(tpmKey, TierTPM2)
 		} else if opts.ForceTier == TierTPM2 {
 			return nil, fmt.Errorf("TPM 2.0 forced but unavailable: %w", err)
 		}
@@ -92,37 +100,42 @@ func LoadOrGenerateIdentity(opts Options) (*IdentityKey, error) {
 	// 2. Tier 1B: Apple Secure Enclave
 	if opts.ForceTier == "" || opts.ForceTier == TierSecureEnclave {
 		if seKey, err := trySecureEnclave(); err == nil && seKey != nil {
-			return buildIdentity(seKey, TierSecureEnclave)
+			return buildIdentityFromECDSA(seKey, TierSecureEnclave)
 		} else if opts.ForceTier == TierSecureEnclave {
 			return nil, fmt.Errorf("Secure Enclave forced but unavailable: %w", err)
 		}
 	}
 
-	// 3. Check ANYCAST_IDENTITY_KEY env var if set
+	// 3. Tier 2: Filesystem fallback (only reached if TPM and SE failed or are unavailable)
+	// Check ANYCAST_IDENTITY_KEY env var if set
 	if envKey := strings.TrimSpace(os.Getenv("ANYCAST_IDENTITY_KEY")); envKey != "" {
-		fileKey, err := tryFilesystem(envKey, opts.AllowCreate)
+		priv, err := tryFilesystem(envKey, opts.AllowCreate)
 		if err != nil {
 			return nil, fmt.Errorf("failed to load identity key from ANYCAST_IDENTITY_KEY: %w", err)
 		}
-		return buildIdentity(fileKey, TierFilesystem)
+		return buildIdentity(priv, TierFilesystem)
 	}
 
-	// 4. Default to identity.key in current working directory
-	fileKey, err := tryFilesystem("identity.key", opts.AllowCreate)
-	if err != nil {
-		return nil, fmt.Errorf("no persistent identity key found (TPM/SE unavailable, and identity.key could not be loaded): %w", err)
+	// Default to KeyFilePath (or "identity.key" in current working directory)
+	keyPath := opts.KeyFilePath
+	if keyPath == "" {
+		keyPath = "identity.key"
 	}
-	return buildIdentity(fileKey, TierFilesystem)
+	priv, err := tryFilesystem(keyPath, opts.AllowCreate)
+	if err != nil {
+		return nil, fmt.Errorf("no persistent identity key found (TPM/SE unavailable, and %s could not be loaded): %w", keyPath, err)
+	}
+	return buildIdentity(priv, TierFilesystem)
 }
 
-// GenerateTestIdentity generates an ephemeral in-memory ECDSA P-256 identity key for unit tests.
+// GenerateTestIdentity generates an ephemeral in-memory Ed25519 identity key for unit tests.
 // This is strictly for automated tests and avoids touching the filesystem.
 func GenerateTestIdentity() (*IdentityKey, error) {
-	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	priv, _, err := ic.GenerateKeyPair(ic.Ed25519, 0)
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate test identity key: %w", err)
 	}
-	return buildIdentity(key, TierFilesystem)
+	return buildIdentity(priv, TierFilesystem)
 }
 
 // NewEphemeralIdentity is an alias for GenerateTestIdentity for testing purposes.
@@ -130,23 +143,27 @@ func NewEphemeralIdentity() (*IdentityKey, error) {
 	return GenerateTestIdentity()
 }
 
-// buildIdentity wraps an ECDSA P-256 key as a libp2p identity and derives the Peer ID.
-func buildIdentity(key *ecdsa.PrivateKey, tier KeystoreTier) (*IdentityKey, error) {
-	p2pPriv, p2pPub, err := ic.ECDSAKeyPairFromKey(key)
+// buildIdentity wraps a libp2p private key and derives the stable Peer ID.
+func buildIdentity(priv ic.PrivKey, tier KeystoreTier) (*IdentityKey, error) {
+	pID, err := peer.IDFromPublicKey(priv.GetPublic())
 	if err != nil {
-		return nil, fmt.Errorf("failed to wrap anchor key as libp2p identity: %w", err)
-	}
-
-	pID, err := peer.IDFromPublicKey(p2pPub)
-	if err != nil {
-		return nil, fmt.Errorf("failed to derive Peer ID from anchor public key: %w", err)
+		return nil, fmt.Errorf("failed to derive Peer ID from public key: %w", err)
 	}
 
 	return &IdentityKey{
 		tier:       tier,
-		libp2pPriv: p2pPriv,
+		libp2pPriv: priv,
 		peerID:     pID,
 	}, nil
+}
+
+// buildIdentityFromECDSA wraps an ECDSA key (e.g. from TPM or Apple Secure Enclave) as a libp2p identity.
+func buildIdentityFromECDSA(key *ecdsa.PrivateKey, tier KeystoreTier) (*IdentityKey, error) {
+	p2pPriv, _, err := ic.ECDSAKeyPairFromKey(key)
+	if err != nil {
+		return nil, fmt.Errorf("failed to wrap anchor key as libp2p identity: %w", err)
+	}
+	return buildIdentity(p2pPriv, tier)
 }
 
 // tryTPM2 attempts to probe and connect to a TPM 2.0 device on Linux or Windows.
@@ -170,23 +187,71 @@ func trySecureEnclave() (*ecdsa.PrivateKey, error) {
 	return nil, errors.New("Secure Enclave not available in current process context")
 }
 
-// tryFilesystem loads an existing ECDSA P-256 key (from file or inline PEM string),
-// or creates a new one if allowed. Supports both SEC1 and PKCS#8 PEM formats.
-func tryFilesystem(pathOrPEM string, allowCreate bool) (*ecdsa.PrivateKey, error) {
-	trimmed := strings.TrimSpace(pathOrPEM)
+// isInlineKey checks whether a string contains inline key data rather than a file path.
+func isInlineKey(s string) bool {
+	trimmed := strings.TrimSpace(s)
+	if strings.Contains(trimmed, "-----BEGIN") {
+		return true
+	}
+	if b64, err := base64.StdEncoding.DecodeString(trimmed); err == nil && len(b64) > 0 {
+		if _, err := ic.UnmarshalPrivateKey(b64); err == nil {
+			return true
+		}
+	}
+	return false
+}
+
+// parsePrivateKey parses key bytes supporting:
+// 1. libp2p protobuf format (libp2p default)
+// 2. Base64-encoded libp2p protobuf format
+// 3. SEC1 or PKCS#8 PEM format (backwards compatibility)
+func parsePrivateKey(data []byte) (ic.PrivKey, error) {
+	// 1. Try standard libp2p protobuf binary format
+	if priv, err := ic.UnmarshalPrivateKey(data); err == nil {
+		return priv, nil
+	}
+
+	// 2. Try base64-encoded protobuf string
+	trimmedStr := strings.TrimSpace(string(data))
+	if b64, err := base64.StdEncoding.DecodeString(trimmedStr); err == nil && len(b64) > 0 {
+		if priv, err := ic.UnmarshalPrivateKey(b64); err == nil {
+			return priv, nil
+		}
+	}
+
+	// 3. Try PEM format (SEC1 or PKCS#8) for backwards compatibility
+	if strings.Contains(trimmedStr, "-----BEGIN") {
+		ecKey, err := parsePrivateKeyPEM(data)
+		if err != nil {
+			return nil, err
+		}
+		p2pPriv, _, err := ic.ECDSAKeyPairFromKey(ecKey)
+		if err != nil {
+			return nil, fmt.Errorf("failed to wrap legacy ECDSA key: %w", err)
+		}
+		return p2pPriv, nil
+	}
+
+	return nil, errors.New("unrecognized identity key format (expected libp2p protobuf, base64, or PEM)")
+}
+
+// tryFilesystem loads an existing key (from file or inline string), or generates a new
+// libp2p Ed25519 key if allowed.
+func tryFilesystem(pathOrData string, allowCreate bool) (ic.PrivKey, error) {
+	trimmed := strings.TrimSpace(pathOrData)
 	if trimmed == "" {
 		return nil, errors.New("empty identity key path or data")
 	}
 
-	// 1. Check if the string itself is an inline PEM private key
-	if strings.Contains(trimmed, "-----BEGIN") {
-		return parsePrivateKeyPEM([]byte(trimmed))
+	// 1. Check if the string itself is inline key data
+	if isInlineKey(trimmed) {
+		return parsePrivateKey([]byte(trimmed))
 	}
 
 	// 2. Read from filesystem path
 	data, err := os.ReadFile(trimmed)
 	if err == nil {
-		return parsePrivateKeyPEM(data)
+		return parsePrivateKey(data)
 	}
 
 	// If read failed, check if systemd passed the file via LoadCredential ($CREDENTIALS_DIRECTORY)
@@ -197,7 +262,7 @@ func tryFilesystem(pathOrPEM string, allowCreate bool) (*ecdsa.PrivateKey, error
 		}
 		for _, c := range candidates {
 			if credData, cErr := os.ReadFile(c); cErr == nil {
-				return parsePrivateKeyPEM(credData)
+				return parsePrivateKey(credData)
 			}
 		}
 	}
@@ -210,21 +275,16 @@ func tryFilesystem(pathOrPEM string, allowCreate bool) (*ecdsa.PrivateKey, error
 		return nil, fmt.Errorf("reading key file %q: %w", trimmed, err)
 	}
 
-	// 3. Generate and save new key
-	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	// 3. Generate and save new key using libp2p default (Ed25519) and libp2p standard protobuf wire format
+	priv, _, err := ic.GenerateKeyPair(ic.Ed25519, 0)
 	if err != nil {
-		return nil, fmt.Errorf("generating ECDSA key: %w", err)
+		return nil, fmt.Errorf("generating libp2p Ed25519 key: %w", err)
 	}
 
-	keyBytes, err := x509.MarshalECPrivateKey(key)
+	keyBytes, err := ic.MarshalPrivateKey(priv)
 	if err != nil {
-		return nil, fmt.Errorf("marshaling EC private key: %w", err)
+		return nil, fmt.Errorf("marshaling libp2p private key: %w", err)
 	}
-
-	pemBytes := pem.EncodeToMemory(&pem.Block{
-		Type:  "EC PRIVATE KEY",
-		Bytes: keyBytes,
-	})
 
 	if dir := filepath.Dir(trimmed); dir != "" && dir != "." {
 		if err := os.MkdirAll(dir, 0700); err != nil {
@@ -232,11 +292,11 @@ func tryFilesystem(pathOrPEM string, allowCreate bool) (*ecdsa.PrivateKey, error
 		}
 	}
 
-	if err := os.WriteFile(trimmed, pemBytes, 0600); err != nil {
+	if err := os.WriteFile(trimmed, keyBytes, 0600); err != nil {
 		return nil, fmt.Errorf("writing key file %q: %w", trimmed, err)
 	}
 
-	return key, nil
+	return priv, nil
 }
 
 // parsePrivateKeyPEM decodes PEM bytes and parses ECDSA private keys in SEC1 or PKCS#8 format.
