@@ -29,9 +29,9 @@ let
             enable = true;
             manifest = pkgs.writeText "manifest.pb" "dummy";
             caPub = pkgs.writeText "ca.pub" "dummy";
+            masterKeyFile = pkgs.writeText "master.key" "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
             settings = {
               edge_multiaddrs = [ "/ip4/127.0.0.1/udp/4002/quic-v1" ];
-              origin_master_key = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
               services = [
                 {
                   service_id = "test-service";

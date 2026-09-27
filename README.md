@@ -356,7 +356,6 @@ Create `origin_config.json`:
   "edge_multiaddrs": [
     "/ip4/203.0.113.10/udp/4002/quic-v1/p2p/12D3KooWEdgePeerID..."
   ],
-  "origin_master_key": "4f8a3c10b7e289d04f8a3c10b7e289d04f8a3c10b7e289d04f8a3c10b7e289d0",
   "services": [
     {
       "service_id": "pbx-sip",
@@ -376,6 +375,12 @@ Create `origin_config.json`:
 }
 ```
 
+Generate a 256-bit secure token for the Origin node:
+
+```bash
+openssl rand -hex 32 > origin_master.key
+```
+
 Run `anycast-origin`:
 
 ```bash
@@ -383,7 +388,8 @@ Run `anycast-origin`:
   --config origin_config.json \
   --manifest origin_manifest.pb \
   --ca-pub ca.pub \
-  --identity-key identity.key
+  --identity-key identity.key \
+  --master-key-file origin_master.key
 ```
 
 ---
@@ -463,11 +469,11 @@ Both modules support an inline `manifestKey` string option (base64) so the manif
 
             caPub = /etc/anycast/ca.pub;
             identityKey = "/var/lib/anycast-origin/identity.key";
+            masterKeyFile = "/run/secrets/origin_master_key";
             settings = {
               edge_multiaddrs = [
                 "/ip4/203.0.113.10/udp/4002/quic-v1/p2p/12D3KooWEdgePeerID..."
               ];
-              origin_master_key = "4f8a3c10b7e289d04f8a3c10b7e289d04f8a3c10b7e289d04f8a3c10b7e289d0";
               services = [
                 {
                   service_id = "pbx-sip";

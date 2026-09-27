@@ -26,7 +26,6 @@ import (
 
 type OriginConfigJSON struct {
 	EdgeMultiaddrs  []string             `json:"edge_multiaddrs"`
-	OriginMasterKey string               `json:"origin_master_key"`
 	Services        []ServiceConfigJSON  `json:"services"`
 }
 
@@ -45,6 +44,7 @@ func main() {
 	manifestPath := flag.String("manifest", "origin_manifest.pb", "Path to Origin SignedCapabilityManifest")
 	caPubPath := flag.String("ca-pub", "ca.pub", "Path to trusted Root CA public key (PEM)")
 	identityKeyPath := flag.String("identity-key", "identity.key", "Path to hardware/filesystem identity key")
+	masterKeyFile := flag.String("master-key-file", "", "Path to file containing Origin 256-bit master key in hex")
 	flag.Parse()
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -89,14 +89,24 @@ func main() {
 		log.Fatalf("[Origin] Failed to parse config JSON: %v", err)
 	}
 
+	var envKey string
+	if *masterKeyFile != "" {
+		keyBytes, err := os.ReadFile(*masterKeyFile)
+		if err != nil {
+			log.Fatalf("[Origin] Failed to read master key file: %v", err)
+		}
+		envKey = strings.TrimSpace(string(keyBytes))
+	} else if keyEnv := os.Getenv("ORIGIN_MASTER_KEY"); keyEnv != "" {
+		envKey = keyEnv
+	} else {
+		log.Fatalf("[Origin] A master key must be provided via --master-key-file or ORIGIN_MASTER_KEY environment variable")
+	}
+
 	var originMasterKey []byte
-	if decoded, err := hex.DecodeString(cfgJSON.OriginMasterKey); err == nil && len(decoded) > 0 {
+	if decoded, err := hex.DecodeString(envKey); err == nil && len(decoded) > 0 {
 		originMasterKey = decoded
 	} else {
-		originMasterKey = []byte(cfgJSON.OriginMasterKey)
-	}
-	if len(originMasterKey) == 0 {
-		originMasterKey = []byte("default-meshcast-origin-master-key")
+		originMasterKey = []byte(envKey)
 	}
 
 	// Parse services

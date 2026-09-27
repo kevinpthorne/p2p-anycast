@@ -51,11 +51,6 @@ in
             default = [];
             description = "List of Edge multiaddrs to connect to.";
           };
-          origin_master_key = lib.mkOption {
-            type = lib.types.str;
-            default = "";
-            description = "Origin 256-bit master key in hex (for HMAC token generation).";
-          };
           services = lib.mkOption {
             type = lib.types.listOf (lib.types.submodule {
               options = {
@@ -128,6 +123,12 @@ in
       description = "Path to hardware or filesystem identity key.";
     };
 
+    masterKeyFile = lib.mkOption {
+      type = lib.types.nullOr lib.types.path;
+      default = null;
+      description = "Path to a file containing the Origin master key in hex. Required.";
+    };
+
     extraArgs = lib.mkOption {
       type = lib.types.listOf lib.types.str;
       default = [];
@@ -156,7 +157,8 @@ in
           "--manifest" (lib.escapeShellArg effectiveManifest)
           "--ca-pub" (lib.escapeShellArg cfg.caPub)
           "--identity-key" (lib.escapeShellArg cfg.identityKey)
-        ] ++ map lib.escapeShellArg cfg.extraArgs);
+        ] ++ lib.optional (cfg.masterKeyFile != null) "--master-key-file ${lib.escapeShellArg cfg.masterKeyFile}"
+          ++ map lib.escapeShellArg cfg.extraArgs);
 
         Restart = "always";
         RestartSec = "5s";
