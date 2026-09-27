@@ -15,6 +15,7 @@ import (
 
 	"p2p-anycast/pkg/control/lease"
 	control "p2p-anycast/pkg/proto/control"
+	"p2p-anycast/pkg/edge/firewall"
 	"p2p-anycast/pkg/edge/forwarder"
 	"p2p-anycast/pkg/edge/proxy"
 	"p2p-anycast/pkg/edge/sni"
@@ -31,6 +32,7 @@ type Router struct {
 	host         host.Host
 	leaseMgr     *lease.Manager
 	forwarder    *forwarder.EdgeDatagramForwarder
+	firewall     firewall.Manager
 	tcpListeners map[uint32]net.Listener
 	udpListeners map[uint32]*net.UDPConn
 	pingCache    map[peer.ID]time.Duration
@@ -38,13 +40,18 @@ type Router struct {
 	cancel       context.CancelFunc
 }
 
-// NewRouter initializes the Edge ingress router.
-func NewRouter(ctx context.Context, h host.Host, leaseMgr *lease.Manager) *Router {
+// NewRouter initializes the Edge ingress router with an optional firewall manager.
+func NewRouter(ctx context.Context, h host.Host, leaseMgr *lease.Manager, fw firewall.Manager) *Router {
+	if fw == nil {
+		fw = firewall.NewNoopManager()
+	}
+
 	rCtx, cancel := context.WithCancel(ctx)
 	r := &Router{
 		host:         h,
 		leaseMgr:     leaseMgr,
 		forwarder:    forwarder.NewEdgeDatagramForwarder(rCtx, h),
+		firewall:     fw,
 		tcpListeners: make(map[uint32]net.Listener),
 		udpListeners: make(map[uint32]*net.UDPConn),
 		pingCache:    make(map[peer.ID]time.Duration),
@@ -68,14 +75,12 @@ func NewRouter(ctx context.Context, h host.Host, leaseMgr *lease.Manager) *Route
 	return r
 }
 
-// Close stops all listeners and forwarders.
+// Close stops all listeners, forwarders, and cleans up firewall rules.
 func (r *Router) Close() {
 	r.cancel()
 	r.forwarder.Close()
 
 	r.mu.Lock()
-	defer r.mu.Unlock()
-
 	for port, ln := range r.tcpListeners {
 		ln.Close()
 		delete(r.tcpListeners, port)
@@ -84,6 +89,9 @@ func (r *Router) Close() {
 		uln.Close()
 		delete(r.udpListeners, port)
 	}
+	r.mu.Unlock()
+
+	_ = r.firewall.Close()
 }
 
 // HandlePeerDisconnected cleans up all registrations for a disconnected peer and stops listeners if empty.
@@ -94,10 +102,10 @@ func (r *Router) HandlePeerDisconnected(pID peer.ID) {
 	}
 }
 
-// SyncPortListener ensures the appropriate OS socket listeners are open or closed based on active leases.
+// SyncPortListener ensures the appropriate OS socket listeners are open or closed based on active leases,
+// and synchronizes the OS firewall rules automatically.
 func (r *Router) SyncPortListener(port uint32) {
 	r.mu.Lock()
-	defer r.mu.Unlock()
 
 	regs := r.leaseMgr.GetRegistrationsForPort(port)
 	hasTCP := false
@@ -115,6 +123,8 @@ func (r *Router) SyncPortListener(port uint32) {
 		}
 	}
 
+	var openTCP, closeTCP, openUDP, closeUDP bool
+
 	// Synchronize TCP listener
 	if hasTCP {
 		if _, exists := r.tcpListeners[port]; !exists {
@@ -122,12 +132,14 @@ func (r *Router) SyncPortListener(port uint32) {
 			if err == nil {
 				r.tcpListeners[port] = ln
 				go r.acceptTCP(port, ln)
+				openTCP = true
 			}
 		}
 	} else {
 		if ln, exists := r.tcpListeners[port]; exists {
 			ln.Close()
 			delete(r.tcpListeners, port)
+			closeTCP = true
 		}
 	}
 
@@ -139,13 +151,31 @@ func (r *Router) SyncPortListener(port uint32) {
 			if err == nil {
 				r.udpListeners[port] = uln
 				go r.acceptUDP(port, uln)
+				openUDP = true
 			}
 		}
 	} else {
 		if uln, exists := r.udpListeners[port]; exists {
 			uln.Close()
 			delete(r.udpListeners, port)
+			closeUDP = true
 		}
+	}
+
+	r.mu.Unlock()
+
+	// Synchronize firewall rules outside of r.mu lock
+	if openTCP {
+		_ = r.firewall.OpenPort(firewall.ProtocolTCP, uint16(port))
+	}
+	if closeTCP {
+		_ = r.firewall.ClosePort(firewall.ProtocolTCP, uint16(port))
+	}
+	if openUDP {
+		_ = r.firewall.OpenPort(firewall.ProtocolUDP, uint16(port))
+	}
+	if closeUDP {
+		_ = r.firewall.ClosePort(firewall.ProtocolUDP, uint16(port))
 	}
 }
 

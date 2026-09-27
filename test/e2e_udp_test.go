@@ -68,7 +68,7 @@ func TestE2EUDPSymmetricNATAndVoIP(t *testing.T) {
 	})
 	defer leaseMgr.Close()
 
-	edgeRouter = ingress.NewRouter(ctx, edgeHost, leaseMgr)
+	edgeRouter = ingress.NewRouter(ctx, edgeHost, leaseMgr, nil)
 	defer edgeRouter.Close()
 
 	_, err = gossip.NewMeshRegistry(ctx, edgeHost, func(reg *control.ServiceRegistration) {

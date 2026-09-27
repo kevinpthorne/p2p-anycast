@@ -12,6 +12,7 @@ import (
 
 	"p2p-anycast/pkg/control/gossip"
 	"p2p-anycast/pkg/control/lease"
+	"p2p-anycast/pkg/edge/firewall"
 	"p2p-anycast/pkg/edge/ingress"
 	"p2p-anycast/pkg/pki/keystore"
 	"p2p-anycast/pkg/pki/manifest"
@@ -27,6 +28,7 @@ func main() {
 	manifestPath := flag.String("manifest", "edge_manifest.pb", "Path to Edge SignedCapabilityManifest (manifest.pb)")
 	caPubPath := flag.String("ca-pub", "ca.pub", "Path to trusted Root CA public key (PEM)")
 	identityKeyPath := flag.String("identity-key", "identity.key", "Path to hardware/filesystem identity key")
+	firewallBackend := flag.String("firewall", "auto", "Firewall backend for dynamic port opening (auto, iptables, nftables, none)")
 	flag.Parse()
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -76,7 +78,14 @@ func main() {
 	authenticator := auth.NewAuthenticator(h, idKey, signedManifest, caPub)
 	authenticator.RegisterStreamHandler()
 
-	// 6. Setup Ingress Router & Lease Manager
+	// 6. Setup Dynamic Firewall Manager
+	fw, err := firewall.New(*firewallBackend)
+	if err != nil {
+		log.Fatalf("[Edge] Failed to initialize firewall manager: %v", err)
+	}
+	defer fw.Close()
+
+	// 7. Setup Ingress Router & Lease Manager
 	var router *ingress.Router
 	leaseMgr := lease.NewManager(lease.Config{
 		OnRegister: func(reg *control.ServiceRegistration) {
@@ -96,7 +105,7 @@ func main() {
 	})
 	defer leaseMgr.Close()
 
-	router = ingress.NewRouter(ctx, h, leaseMgr)
+	router = ingress.NewRouter(ctx, h, leaseMgr, fw)
 	defer router.Close()
 
 	// 7. Setup GossipSub Control Plane (/p2p-anycast/registry/1.0.0)

@@ -33,7 +33,7 @@
 
 ### Strict Architectural Invariants
 
-1. **Zero Virtual Network Interfaces:** Do not create or manipulate OS-level virtual interfaces (`tun`/`tap`/`wg`). No root networking capabilities (`CAP_NET_ADMIN`) required.
+1. **Zero Virtual Network Interfaces:** Do not create or manipulate OS-level virtual interfaces (`tun`/`tap`/`wg`). Pure user-space transport. Optional `CAP_NET_ADMIN` ambient capability is utilized solely for automated dynamic netfilter/firewall port rules when running as an unprivileged service.
 2. **Outbound-Only Ingress to Origin:** Origins initiate outbound QUIC connections to public Edge IP endpoints. Edges never dial inbound into Origin network perimeters.
 3. **No Head-of-Line Blocking for VoIP:** All UDP media (RTP) is transported via RFC 9221 QUIC Unreliable Datagram frames. Dropped packets must not trigger retransmissions.
 4. **Opaque Edge-Side Routing:** Edges are unprivileged relays. They have zero knowledge of internal origin IP addresses, internal ports, or network topologies. Services are identified across the wire solely via deterministic 128-bit BLAKE3 `binding_id` tokens.
@@ -248,6 +248,15 @@ The edge inspects only the first TLS ClientHello frame without completing the ha
 3. Traverse the extension vector looking for `ExtensionType == 0x0000` (Server Name Indication).
 4. Extract `ServerNameList[0]` hostname string.
 5. If malformed or SNI is not found, emit TCP `RST` and abort.
+ 
+### 4.2 Dynamic Firewall Port Synchronization
+
+To prevent requiring static OS rebuilds or firewall redeployments on Linux/NixOS hosts:
+1. `anycast-edge` integrates a reactive `firewall.Manager` (`iptables`, `nftables`, or `auto`).
+2. When an Origin advertises a validated service and `SyncPortListener` binds an OS socket listener, the firewall manager automatically inserts an `ACCEPT` rule for the corresponding protocol and port.
+3. Reference counts are tracked per `(protocol, port)` so multi-tenant ports (e.g. `TLS_SNI` or `CLUSTERED_RTT`) remain open until the last lease is evicted.
+4. On lease eviction, revocation, or peer disconnect, the firewall rule is automatically removed.
+5. On shutdown or service termination, all dynamically created rules, chains, and tables are flushed and pruned.
 
 ---
 

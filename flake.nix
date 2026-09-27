@@ -27,14 +27,14 @@
           packages = {
             anycast-edge = pkgs.buildGoModule {
               pname = "anycast-edge";
-              version = "0.1.0";
+              version = "0.2.0";
               src = ./.;
               subPackages = [ "cmd/anycast-edge" ];
               vendorHash = null;
 
               meta = with pkgs.lib; {
                 description = "MeshCast decentralized edge router daemon";
-                homepage = "https://github.com/p2p-anycast/p2p-anycast";
+                homepage = "https://github.com/kevinpthorne/p2p-anycast";
                 license = licenses.asl20;
                 mainProgram = "anycast-edge";
               };
@@ -42,14 +42,14 @@
 
             anycast-origin = pkgs.buildGoModule {
               pname = "anycast-origin";
-              version = "0.1.0";
+              version = "0.2.0";
               src = ./.;
               subPackages = [ "cmd/anycast-origin" ];
               vendorHash = null;
 
               meta = with pkgs.lib; {
                 description = "MeshCast origin sidecar daemon";
-                homepage = "https://github.com/p2p-anycast/p2p-anycast";
+                homepage = "https://github.com/kevinpthorne/p2p-anycast";
                 license = licenses.asl20;
                 mainProgram = "anycast-origin";
               };
@@ -57,14 +57,14 @@
 
             anycast-ca = pkgs.buildGoModule {
               pname = "anycast-ca";
-              version = "0.1.0";
+              version = "0.2.0";
               src = ./.;
               subPackages = [ "cmd/anycast-ca" ];
               vendorHash = null;
 
               meta = with pkgs.lib; {
                 description = "MeshCast post-quantum CA CLI tool";
-                homepage = "https://github.com/p2p-anycast/p2p-anycast";
+                homepage = "https://github.com/kevinpthorne/p2p-anycast";
                 license = licenses.asl20;
                 mainProgram = "anycast-ca";
               };

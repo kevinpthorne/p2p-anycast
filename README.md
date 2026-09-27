@@ -439,6 +439,12 @@ Both modules support an inline `manifestKey` string option (base64) so the manif
 
             identityKey = "/var/lib/anycast-edge/identity.key";
             openFirewall = true;
+
+            # Dynamic port management (enabled by default)
+            # Public ports automatically open and close in iptables/nftables
+            # as authenticated services are announced/evicted by Origins.
+            # No OS rebuilds or nixos-rebuild required!
+            dynamicFirewall.enable = true;
           };
         }
       ];

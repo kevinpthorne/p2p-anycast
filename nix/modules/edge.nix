@@ -113,6 +113,20 @@ let
           };
         };
 
+        dynamicFirewall = {
+          enable = lib.mkOption {
+            type = lib.types.bool;
+            default = true;
+            description = "Whether to automatically open and close forwarded service ports dynamically in the firewall as services are registered or evicted.";
+          };
+
+          backend = lib.mkOption {
+            type = lib.types.enum [ "auto" "iptables" "nftables" "none" ];
+            default = "auto";
+            description = "Firewall backend to use for dynamic port management.";
+          };
+        };
+
         extraArgs = lib.mkOption {
           type = lib.types.listOf lib.types.str;
           default = [ ];
@@ -124,6 +138,15 @@ let
         networking.firewall = lib.mkIf cfg.openFirewall {
           allowedUDPPorts = listenUdpPort ++ cfg.openPorts.udp;
           allowedTCPPorts = cfg.openPorts.tcp;
+          extraCommands = lib.mkIf cfg.dynamicFirewall.enable ''
+            ip46tables -N ANYCAST-EDGE 2>/dev/null || true
+            ip46tables -C nixos-fw -j ANYCAST-EDGE 2>/dev/null || ip46tables -I nixos-fw 1 -j ANYCAST-EDGE 2>/dev/null || true
+          '';
+          extraStopCommands = lib.mkIf cfg.dynamicFirewall.enable ''
+            ip46tables -D nixos-fw -j ANYCAST-EDGE 2>/dev/null || true
+            ip46tables -F ANYCAST-EDGE 2>/dev/null || true
+            ip46tables -X ANYCAST-EDGE 2>/dev/null || true
+          '';
         };
 
         systemd.services.anycast-edge = {
@@ -131,6 +154,11 @@ let
           wantedBy = [ "multi-user.target" ];
           after = [ "network-online.target" ];
           wants = [ "network-online.target" ];
+          path = [
+            pkgs.iptables
+            pkgs.nftables
+            pkgs.iproute2
+          ];
 
           serviceConfig = {
             ExecStart = lib.concatStringsSep " " (
@@ -144,20 +172,27 @@ let
                 (lib.escapeShellArg (toString effectiveCaPub))
                 "--identity-key"
                 (lib.escapeShellArg cfg.identityKey)
+                "--firewall"
+                (lib.escapeShellArg (if cfg.dynamicFirewall.enable then cfg.dynamicFirewall.backend else "none"))
               ]
               ++ map lib.escapeShellArg cfg.extraArgs
             );
 
             Restart = "always";
             RestartSec = "5s";
+            RuntimeDirectory = "anycast-edge";
             StateDirectory = "anycast-edge";
             WorkingDirectory = "/var/lib/anycast-edge";
             LimitNOFILE = 65536;
 
+            Environment = [
+              "XTABLES_LOCKFILE=/run/anycast-edge/xtables.lock"
+            ];
+
             # Sandboxing and capabilities
             DynamicUser = true;
-            AmbientCapabilities = [ "CAP_NET_BIND_SERVICE" ];
-            CapabilityBoundingSet = [ "CAP_NET_BIND_SERVICE" ];
+            AmbientCapabilities = [ "CAP_NET_BIND_SERVICE" ] ++ lib.optional cfg.dynamicFirewall.enable "CAP_NET_ADMIN";
+            CapabilityBoundingSet = [ "CAP_NET_BIND_SERVICE" ] ++ lib.optional cfg.dynamicFirewall.enable "CAP_NET_ADMIN";
             ProtectSystem = "strict";
             ProtectHome = true;
             PrivateTmp = true;

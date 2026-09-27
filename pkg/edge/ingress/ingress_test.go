@@ -8,10 +8,30 @@ import (
 	"time"
 
 	"p2p-anycast/pkg/control/lease"
+	"p2p-anycast/pkg/edge/firewall"
 	"p2p-anycast/pkg/pki/keystore"
 	control "p2p-anycast/pkg/proto/control"
 	p2pquic "p2p-anycast/pkg/transport/quic"
 )
+
+type testFirewallMock struct {
+	opened []string
+	closed []string
+}
+
+func (m *testFirewallMock) OpenPort(proto firewall.Protocol, port uint16) error {
+	m.opened = append(m.opened, fmt.Sprintf("%s:%d", proto, port))
+	return nil
+}
+
+func (m *testFirewallMock) ClosePort(proto firewall.Protocol, port uint16) error {
+	m.closed = append(m.closed, fmt.Sprintf("%s:%d", proto, port))
+	return nil
+}
+
+func (m *testFirewallMock) Close() error {
+	return nil
+}
 
 func TestEdgeDynamicListenerBinding(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -27,7 +47,8 @@ func TestEdgeDynamicListenerBinding(t *testing.T) {
 	leaseMgr := lease.NewManager(lease.Config{})
 	defer leaseMgr.Close()
 
-	router := NewRouter(ctx, h, leaseMgr)
+	fwMock := &testFirewallMock{}
+	router := NewRouter(ctx, h, leaseMgr, fwMock)
 	defer router.Close()
 
 	// Pick a free random port for testing
@@ -64,6 +85,11 @@ func TestEdgeDynamicListenerBinding(t *testing.T) {
 	}
 	conn.Close()
 
+	expectedPortStr := fmt.Sprintf("tcp:%d", testPort)
+	if len(fwMock.opened) != 1 || fwMock.opened[0] != expectedPortStr {
+		t.Errorf("expected firewall opened %s, got %v", expectedPortStr, fwMock.opened)
+	}
+
 	// 3. Evict service and verify listener unbinds
 	leaseMgr.Revoke(h.ID().String(), bID)
 	router.SyncPortListener(testPort)
@@ -73,5 +99,9 @@ func TestEdgeDynamicListenerBinding(t *testing.T) {
 	if err == nil {
 		connAfter.Close()
 		t.Fatal("port is still accepting connections after unregister")
+	}
+
+	if len(fwMock.closed) != 1 || fwMock.closed[0] != expectedPortStr {
+		t.Errorf("expected firewall closed %s, got %v", expectedPortStr, fwMock.closed)
 	}
 }
