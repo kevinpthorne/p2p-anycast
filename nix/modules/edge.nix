@@ -162,11 +162,11 @@ let
         networking.firewall = lib.mkIf cfg.openFirewall {
           allowedUDPPorts = listenUdpPort ++ cfg.openPorts.udp;
           allowedTCPPorts = cfg.openPorts.tcp;
-          extraCommands = lib.mkIf cfg.dynamicFirewall.enable ''
+          extraCommands = lib.mkIf (cfg.dynamicFirewall.enable && !config.networking.nftables.enable) ''
             ip46tables -N ANYCAST-EDGE 2>/dev/null || true
             ip46tables -C nixos-fw -j ANYCAST-EDGE 2>/dev/null || ip46tables -I nixos-fw 1 -j ANYCAST-EDGE 2>/dev/null || true
           '';
-          extraStopCommands = lib.mkIf cfg.dynamicFirewall.enable ''
+          extraStopCommands = lib.mkIf (cfg.dynamicFirewall.enable && !config.networking.nftables.enable) ''
             ip46tables -D nixos-fw -j ANYCAST-EDGE 2>/dev/null || true
             ip46tables -F ANYCAST-EDGE 2>/dev/null || true
             ip46tables -X ANYCAST-EDGE 2>/dev/null || true
