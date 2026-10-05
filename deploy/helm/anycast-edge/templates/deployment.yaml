@@ -5,6 +5,10 @@ metadata:
   labels:
     {{- include "anycast-edge.labels" . | nindent 4 }}
 spec:
+  {{- if .Values.identity.pvc.enabled }}
+  strategy:
+    type: Recreate
+  {{- end }}
   replicas: {{ .Values.replicaCount }}
   selector:
     matchLabels:
@@ -37,7 +41,11 @@ spec:
             - -listen-p2p={{ .Values.config.listenP2p }}
             - -manifest=/etc/anycast/edge_manifest.pb
             - -ca-pub=/etc/anycast/ca.pub
+            {{- if .Values.identity.pvc.enabled }}
+            - -identity-key=/var/lib/anycast/identity/identity.key
+            {{- else }}
             - -identity-key=/etc/anycast/identity.key
+            {{- end }}
             - -firewall={{ .Values.config.firewall }}
           ports:
             - name: p2p
@@ -52,12 +60,21 @@ spec:
             - name: anycast-secrets
               mountPath: /etc/anycast
               readOnly: true
+            {{- if .Values.identity.pvc.enabled }}
+            - name: identity-storage
+              mountPath: /var/lib/anycast/identity
+            {{- end }}
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
       volumes:
         - name: anycast-secrets
           secret:
             secretName: {{ if .Values.existingSecret }}{{ .Values.existingSecret }}{{ else }}{{ include "anycast-edge.fullname" . }}-secrets{{ end }}
+        {{- if .Values.identity.pvc.enabled }}
+        - name: identity-storage
+          persistentVolumeClaim:
+            claimName: {{ if .Values.identity.pvc.existingClaim }}{{ .Values.identity.pvc.existingClaim }}{{ else }}{{ include "anycast-edge.fullname" . }}-identity{{ end }}
+        {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

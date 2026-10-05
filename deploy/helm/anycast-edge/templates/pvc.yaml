@@ -1,0 +1,17 @@
+{{- if and .Values.identity.pvc.enabled (not .Values.identity.pvc.existingClaim) }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "anycast-edge.fullname" . }}-identity
+  labels:
+    {{- include "anycast-edge.labels" . | nindent 4 }}
+spec:
+  accessModes:
+    {{- toYaml .Values.identity.pvc.accessModes | nindent 4 }}
+  resources:
+    requests:
+      storage: {{ .Values.identity.pvc.size }}
+  {{- if .Values.identity.pvc.storageClassName }}
+  storageClassName: {{ .Values.identity.pvc.storageClassName }}
+  {{- end }}
+{{- end }}

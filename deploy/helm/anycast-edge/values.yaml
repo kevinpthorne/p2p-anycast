@@ -48,3 +48,12 @@ resources: {}
 nodeSelector: {}
 tolerations: []
 affinity: {}
+
+identity:
+  pvc:
+    enabled: false
+    # storageClassName: ""
+    accessModes:
+      - ReadWriteOnce
+    size: 100Ki
+    existingClaim: ""

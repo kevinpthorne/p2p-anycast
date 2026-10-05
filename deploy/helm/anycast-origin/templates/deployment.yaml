@@ -5,6 +5,10 @@ metadata:
   labels:
     {{- include "anycast-origin.labels" . | nindent 4 }}
 spec:
+  {{- if .Values.identity.pvc.enabled }}
+  strategy:
+    type: Recreate
+  {{- end }}
   replicas: {{ .Values.replicaCount }}
   selector:
     matchLabels:
@@ -39,7 +43,11 @@ spec:
             - -config=/etc/anycast/config/origin_config.json
             - -manifest=/etc/anycast/secrets/origin_manifest.pb
             - -ca-pub=/etc/anycast/secrets/ca.pub
+            {{- if .Values.identity.pvc.enabled }}
+            - -identity-key=/var/lib/anycast/identity/identity.key
+            {{- else }}
             - -identity-key=/etc/anycast/secrets/identity.key
+            {{- end }}
             - -master-key-file=/etc/anycast/secrets/master.key
           volumeMounts:
             - name: anycast-config
@@ -48,6 +56,10 @@ spec:
             - name: anycast-secrets
               mountPath: /etc/anycast/secrets
               readOnly: true
+            {{- if .Values.identity.pvc.enabled }}
+            - name: identity-storage
+              mountPath: /var/lib/anycast/identity
+            {{- end }}
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
       volumes:
@@ -57,6 +69,11 @@ spec:
         - name: anycast-secrets
           secret:
             secretName: {{ if .Values.existingSecret }}{{ .Values.existingSecret }}{{ else }}{{ include "anycast-origin.fullname" . }}-secrets{{ end }}
+        {{- if .Values.identity.pvc.enabled }}
+        - name: identity-storage
+          persistentVolumeClaim:
+            claimName: {{ if .Values.identity.pvc.existingClaim }}{{ .Values.identity.pvc.existingClaim }}{{ else }}{{ include "anycast-origin.fullname" . }}-identity{{ end }}
+        {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}
