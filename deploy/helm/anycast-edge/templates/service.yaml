@@ -1,0 +1,21 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "anycast-edge.fullname" . }}
+  labels:
+    {{- include "anycast-edge.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.service.type }}
+  ports:
+    - port: {{ .Values.service.p2pPort }}
+      targetPort: p2p
+      protocol: UDP
+      name: p2p
+    {{- range .Values.service.extraPorts }}
+    - port: {{ .port }}
+      targetPort: {{ .name }}
+      protocol: {{ .protocol | default "TCP" }}
+      name: {{ .name }}
+    {{- end }}
+  selector:
+    {{- include "anycast-edge.selectorLabels" . | nindent 4 }}

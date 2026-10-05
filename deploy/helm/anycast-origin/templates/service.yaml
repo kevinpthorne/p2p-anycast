@@ -1,0 +1,19 @@
+{{- if .Values.service.ports }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "anycast-origin.fullname" . }}
+  labels:
+    {{- include "anycast-origin.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.service.type }}
+  ports:
+    {{- range .Values.service.ports }}
+    - port: {{ .port }}
+      targetPort: {{ .name }}
+      protocol: {{ .protocol | default "TCP" }}
+      name: {{ .name }}
+    {{- end }}
+  selector:
+    {{- include "anycast-origin.selectorLabels" . | nindent 4 }}
+{{- end }}

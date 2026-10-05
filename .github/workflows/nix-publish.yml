@@ -165,3 +165,57 @@ jobs:
         with:
           files: release-dist/*
           generate_release_notes: true
+
+  publish-helm:
+    name: Package and Push Helm Charts to GHCR
+    needs: check-and-build
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: 'v3.14.0' # or 'latest'
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Package and Push Helm Charts
+        run: |
+          OWNER_LOWER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          export HELM_EXPERIMENTAL_OCI=1
+
+          # Login Helm to GHCR
+          echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ghcr.io -u ${{ github.actor }} --password-stdin
+
+          echo "Determining version..."
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            # Release tag
+            VERSION="${GITHUB_REF#refs/tags/v}"
+            echo "Packaging release version: ${VERSION}"
+            helm package deploy/helm/anycast-edge --destination . --version "${VERSION}" --app-version "${VERSION}"
+            helm package deploy/helm/anycast-origin --destination . --version "${VERSION}" --app-version "${VERSION}"
+          else
+            # Main branch (dev build)
+            # Use the version from Chart.yaml but append the short SHA to avoid duplicate pushes
+            # if we wanted, or just rely on standard Chart.yaml if not strict
+            echo "Packaging dev version from Chart.yaml..."
+            helm package deploy/helm/anycast-edge --destination .
+            helm package deploy/helm/anycast-origin --destination .
+          fi
+
+          echo "Pushing Helm charts to GHCR..."
+          for chart in *.tgz; do
+            helm push "$chart" "oci://ghcr.io/${OWNER_LOWER}/charts"
+          done

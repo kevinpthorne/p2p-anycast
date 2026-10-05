@@ -1,0 +1,44 @@
+replicaCount: 1
+
+image:
+  repository: anycast-origin
+  pullPolicy: IfNotPresent
+  tag: "latest"
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  create: true
+  annotations: {}
+  name: ""
+
+podAnnotations: {}
+podSecurityContext: {}
+securityContext: {}
+
+# Origin typically doesn't need public exposure through LoadBalancer
+# unless there's a local diagnostic port or similar.
+service:
+  type: ClusterIP
+  ports: []
+
+config:
+  # The config JSON will be created as a ConfigMap
+  edge_multiaddrs: []
+  services: []
+
+# Secret containing the CA public key, origin manifest, identity key, and master key
+existingSecret: ""
+# If existingSecret is not provided, the chart will look for these values to create a secret
+secrets:
+  caPub: ""        # string: PEM encoded CA public key
+  manifestBase64: "" # string: Base64 encoded manifest.pb or raw text manifest
+  identityKey: ""  # string: Hardware/filesystem identity key content
+  masterKey: ""    # string: 256-bit master key in hex
+
+resources: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}

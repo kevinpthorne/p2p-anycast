@@ -1,0 +1,50 @@
+replicaCount: 1
+
+image:
+  repository: anycast-edge
+  pullPolicy: IfNotPresent
+  tag: "latest"
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  create: true
+  annotations: {}
+  name: ""
+
+podAnnotations: {}
+podSecurityContext: {}
+securityContext:
+  # firewall "auto" might require NET_ADMIN
+  # capabilities:
+  #   add:
+  #     - NET_ADMIN
+
+service:
+  type: LoadBalancer
+  p2pPort: 4002
+  # List of additional ports to expose publicly via the load balancer for user services
+  # e.g., - port: 80
+  #       targetPort: 80
+  #       protocol: TCP
+  #       name: http
+  extraPorts: []
+
+config:
+  listenP2p: "/ip4/0.0.0.0/udp/4002/quic-v1"
+  firewall: "none" # "auto", "iptables", "nftables", "none"
+
+# Secret containing the CA public key, edge manifest, and identity key
+existingSecret: ""
+# If existingSecret is not provided, the chart will look for these values to create a secret
+secrets:
+  caPub: ""        # string: PEM encoded CA public key
+  manifestBase64: "" # string: Base64 encoded manifest.pb or raw text manifest
+  identityKey: ""  # string: Hardware/filesystem identity key content
+
+resources: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}
