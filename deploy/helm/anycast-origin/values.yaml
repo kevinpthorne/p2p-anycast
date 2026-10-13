@@ -11,6 +11,7 @@ fullnameOverride: ""
 
 serviceAccount:
   create: true
+  automount: true
   annotations: {}
   name: ""
 
@@ -41,6 +42,20 @@ config:
     #   public_port: 5060
     #   policy: "STRICT_SINGLETON"
     #   target: "127.0.0.1:5060"
+
+# Optional Kubernetes Service & Gateway API TLSRoute annotation discovery
+k8sDiscovery:
+  enabled: false
+  # Filter to a specific namespace. Empty string means all namespaces across the cluster.
+  namespace: ""
+  # Default fallback gateway target for TLS SNI services (e.g. "cilium-gateway.kube-system.svc.cluster.local:443")
+  defaultGatewayTarget: ""
+  # Custom annotation prefix (defaults to p2p-anycast.io and anycast.io)
+  annotationPrefix: ""
+
+rbac:
+  # Create Role/ClusterRole and RoleBinding/ClusterRoleBinding for K8s service and TLSRoute discovery
+  create: true
 
 # Secret containing the CA public key, origin manifest, identity key, and master key
 existingSecret: ""

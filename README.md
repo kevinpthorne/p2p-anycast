@@ -424,6 +424,106 @@ Run `anycast-origin`:
   --master-key-file origin_master.key
 ```
 
+### 6. Kubernetes Service & Gateway API Discovery (Optional)
+
+`anycast-origin` can dynamically discover exposed services directly from Kubernetes cluster annotations instead of requiring manual entries in `origin_config.json`:
+
+```bash
+./bin/anycast-origin \
+  --k8s \
+  --k8s-default-gateway-target "cilium-gateway.kube-system.svc.cluster.local:443" \
+  --config origin_config.json \
+  --manifest origin_manifest.pb \
+  --ca-pub ca.pub \
+  --identity-key identity.key \
+  --master-key-file origin_master.key
+```
+
+When running in-cluster (e.g. via Helm), `anycast-origin` automatically detects service account tokens and CA certificates (`/var/run/secrets/kubernetes.io/serviceaccount/`), requiring zero manual CA wiring (compatible with standard Kubernetes and RKE2 `kube-root-ca.crt`).
+
+#### A. Dedicated L4 Services (Minecraft, VoIP PBX)
+
+Annotate the Kubernetes `Service` with `p2p-anycast.io/expose: "true"`:
+
+```yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: minecraft-smp
+  namespace: gaming
+  annotations:
+    p2p-anycast.io/expose: "true"
+spec:
+  ports:
+    - name: game
+      port: 25565
+      protocol: TCP
+```
+
+- **Policy**: Defaults to **`STRICT_SINGLETON`** (fails closed on origin loss, fenced on `(25565, "")`).
+- **Demux Mode**: Automatically **`DEMUX_PORT`** (1:1 port forwarding).
+- **Target**: Defaults to `minecraft-smp.gaming.svc.cluster.local:25565`.
+
+#### B. HTTPS Apps via Gateway API TLSRoute (Cilium Gateway)
+
+Annotate the Gateway API `TLSRoute` with `p2p-anycast.io/expose: "true"`:
+
+```yaml
+apiVersion: gateway.networking.k8s.io/v1alpha2
+kind: TLSRoute
+metadata:
+  name: api-tls
+  namespace: apps
+  annotations:
+    p2p-anycast.io/expose: "true"
+spec:
+  parentRefs:
+    - name: cilium-gateway
+      namespace: kube-system
+  hostnames:
+    - "api.example.com"
+  rules:
+    - backendRefs:
+        - name: api-backend
+          port: 8080
+```
+
+- **Policy**: Defaults to **`STRICT_SINGLETON`** (fenced on `(443, "api.example.com")`), or set `p2p-anycast.io/policy: "CLUSTERED_RTT"` for stateless active/active across origins.
+- **Demux Mode**: Automatically **`DEMUX_TLS_SNI`** on port 443.
+- **SNI Hostname**: Extracted directly from `spec.hostnames`.
+- **Target**: Automatically resolves to the parent Gateway FQDN (`cilium-gateway.kube-system.svc.cluster.local:443`).
+
+#### C. Centralized Gateway Service (`sni-hostnames`)
+
+Alternatively, annotate the Cilium Gateway service itself with a comma-separated list of hostnames:
+
+```yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: cilium-gateway
+  namespace: kube-system
+  annotations:
+    p2p-anycast.io/expose: "true"
+    p2p-anycast.io/sni-hostnames: "api.example.com, dash.example.com"
+```
+
+#### Supported Annotations
+
+| Annotation | Description | Default |
+| --- | --- | --- |
+| `p2p-anycast.io/expose` (or `anycast.io/expose`) | Enable `p2p-anycast` exposure (`"true"`, `"1"`, `"yes"`). | `"false"` |
+| `p2p-anycast.io/policy` | Origin dispatch policy (`STRICT_SINGLETON`, `CLUSTERED_RTT`, `FAILOVER_STANDBY`). | **`STRICT_SINGLETON`** |
+| `p2p-anycast.io/public-port` | Public port requested on Edge routers. | `443` (for SNI/TLSRoute) or Service port |
+| `p2p-anycast.io/protocol` | Transport protocol (`TCP`, `UDP`, `TCP_AND_UDP`). | Port protocol |
+| `p2p-anycast.io/target` | Target backend address dialed by Origin. | `<svc>.<ns>.svc.cluster.local:<port>` or parent Gateway |
+| `p2p-anycast.io/target-backend` | When set to `"true"` on a `TLSRoute`, targets `backendRefs` instead of parent Gateway. | `"false"` |
+| `p2p-anycast.io/sni-hostname` | Single SNI hostname on a `Service`. | `""` |
+| `p2p-anycast.io/sni-hostnames` | Comma-separated SNI hostnames on a gateway `Service`. | `""` |
+| `p2p-anycast.io/enable-proxy-protocol` | Inject PROXYv2 binary header on TCP streams. | `"false"` |
+| `p2p-anycast.io/ports` | Comma-separated list of port names/numbers to expose on multi-port services. | All ports |
+
+
 ---
 
 ## Nix & NixOS Deployment

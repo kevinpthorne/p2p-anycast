@@ -1,0 +1,63 @@
+{{- if and .Values.k8sDiscovery.enabled .Values.rbac.create -}}
+{{- if .Values.k8sDiscovery.namespace }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "anycast-origin.fullname" . }}-discovery
+  namespace: {{ .Values.k8sDiscovery.namespace }}
+  labels:
+    {{- include "anycast-origin.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["services"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["gateway.networking.k8s.io"]
+    resources: ["tlsroutes"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "anycast-origin.fullname" . }}-discovery
+  namespace: {{ .Values.k8sDiscovery.namespace }}
+  labels:
+    {{- include "anycast-origin.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "anycast-origin.fullname" . }}-discovery
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "anycast-origin.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+{{- else }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "anycast-origin.fullname" . }}-discovery
+  labels:
+    {{- include "anycast-origin.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["services"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["gateway.networking.k8s.io"]
+    resources: ["tlsroutes"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "anycast-origin.fullname" . }}-discovery
+  labels:
+    {{- include "anycast-origin.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "anycast-origin.fullname" . }}-discovery
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "anycast-origin.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+{{- end }}
+{{- end }}

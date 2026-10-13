@@ -49,6 +49,18 @@ spec:
             - -identity-key=/etc/anycast/secrets/identity.key
             {{- end }}
             - -master-key-file=/etc/anycast/secrets/master.key
+            {{- if .Values.k8sDiscovery.enabled }}
+            - -k8s=true
+            {{- if .Values.k8sDiscovery.namespace }}
+            - -k8s-namespace={{ .Values.k8sDiscovery.namespace }}
+            {{- end }}
+            {{- if .Values.k8sDiscovery.defaultGatewayTarget }}
+            - -k8s-default-gateway-target={{ .Values.k8sDiscovery.defaultGatewayTarget }}
+            {{- end }}
+            {{- if .Values.k8sDiscovery.annotationPrefix }}
+            - -k8s-annotation-prefix={{ .Values.k8sDiscovery.annotationPrefix }}
+            {{- end }}
+            {{- end }}
           volumeMounts:
             - name: anycast-config
               mountPath: /etc/anycast/config

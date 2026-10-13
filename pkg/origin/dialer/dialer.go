@@ -130,6 +130,33 @@ func (o *OriginNode) Close() {
 	o.cancel()
 }
 
+// UpdateServices updates the active services list, updates the dispatch routes,
+// and announces the new services immediately to all connected edges.
+func (o *OriginNode) UpdateServices(services []ServiceConfig) {
+	o.mu.Lock()
+	o.services = services
+	active := make([]peer.ID, 0, len(o.activeEdges))
+	for pID := range o.activeEdges {
+		active = append(active, pID)
+	}
+	o.mu.Unlock()
+
+	for _, svc := range services {
+		bID := binding.DeriveBindingID(svc.ServiceID, svc.Protocol, svc.PublicPort, svc.SNIHostname)
+		o.routes.AddRoute(dispatch.Route{
+			BindingID:  bID,
+			Target:     svc.Target,
+			Protocol:   svc.Protocol,
+			PublicPort: svc.PublicPort,
+			ServiceID:  svc.ServiceID,
+		})
+	}
+
+	for _, edgePeer := range active {
+		o.announceServicesToEdge(edgePeer)
+	}
+}
+
 // maintainConnection persists an outbound QUIC connection to an Edge with exponential backoff.
 func (o *OriginNode) maintainConnection(addr multiaddr.Multiaddr) {
 	addrInfo, err := peer.AddrInfoFromP2pAddr(addr)

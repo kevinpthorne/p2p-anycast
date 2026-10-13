@@ -17,6 +17,7 @@ import (
 	control "p2p-anycast/pkg/proto/control"
 	"p2p-anycast/pkg/origin/dialer"
 	"p2p-anycast/pkg/origin/dispatch"
+	"p2p-anycast/pkg/origin/k8s"
 	"p2p-anycast/pkg/origin/nat"
 	"p2p-anycast/pkg/origin/stream"
 	"p2p-anycast/pkg/pki/keystore"
@@ -48,6 +49,14 @@ func main() {
 	identityKeyPath := flag.String("identity-key", "identity.key", "Path to hardware/filesystem identity key")
 	printPeerID := flag.Bool("print-peer-id", false, "Print the libp2p Peer ID derived from the identity key and exit")
 	masterKeyFile := flag.String("master-key-file", "", "Path to file containing Origin 256-bit master key in hex")
+	k8sEnable := flag.Bool("k8s", false, "Enable Kubernetes service discovery via annotations")
+	k8sDefaultGatewayTarget := flag.String("k8s-default-gateway-target", "", "Default fallback gateway target for TLS SNI services (e.g. cilium-gateway.kube-system.svc.cluster.local:443)")
+	k8sAPIServer := flag.String("k8s-api-server", "", "Kubernetes API server base URL")
+	k8sToken := flag.String("k8s-token", "", "Kubernetes Bearer token or path to token file")
+	k8sCACert := flag.String("k8s-ca-cert", "", "Path to Kubernetes CA certificate")
+	k8sNamespace := flag.String("k8s-namespace", "", "Kubernetes namespace to discover services from (default: all namespaces)")
+	k8sAnnotationPrefix := flag.String("k8s-annotation-prefix", "", "Custom annotation prefix (default: p2p-anycast.io and anycast.io)")
+	k8sInsecure := flag.Bool("k8s-insecure-skip-tls-verify", false, "Skip TLS verification when connecting to Kubernetes API")
 	flag.Parse()
 
 	// 1. Load Origin Identity Key (TPM2 -> Secure Enclave -> Filesystem)
@@ -168,6 +177,42 @@ func main() {
 			Target:              s.Target,
 			EnableProxyProtocol: s.EnableProxyProtocol,
 		})
+	}
+
+	if *k8sEnable || os.Getenv("ANYCAST_K8S") == "true" {
+		k8sClient, err := k8s.NewClient(k8s.ClientConfig{
+			APIServerURL:          *k8sAPIServer,
+			Token:                 *k8sToken,
+			CACertFile:            *k8sCACert,
+			Namespace:              *k8sNamespace,
+			InsecureSkipTLSVerify: *k8sInsecure,
+		})
+		if err != nil {
+			log.Fatalf("[Origin] Failed to initialize Kubernetes client: %v", err)
+		}
+
+		k8sServices, err := k8sClient.ListServices(ctx, *k8sNamespace)
+		if err != nil {
+			log.Fatalf("[Origin] Failed to list Kubernetes services: %v", err)
+		}
+
+		k8sTLSRoutes, err := k8sClient.ListTLSRoutes(ctx, *k8sNamespace)
+		if err != nil {
+			log.Printf("[Origin] Warning: failed to list TLSRoutes: %v", err)
+		}
+
+		discovered := k8s.BuildServicesFromK8s(k8sServices, k8sTLSRoutes, k8s.BuilderOptions{
+			AnnotationPrefix:     *k8sAnnotationPrefix,
+			DefaultGatewayTarget: *k8sDefaultGatewayTarget,
+		})
+
+		log.Printf("[Origin] Discovered %d service(s) from Kubernetes annotations", len(discovered))
+		for _, d := range discovered {
+			log.Printf("[Origin]   -> [%s] %s:%d (policy: %s, sni: %q, target: %s)",
+				d.ServiceID, d.Protocol, d.PublicPort, d.Policy, d.SNIHostname, d.Target)
+		}
+
+		services = append(services, discovered...)
 	}
 
 	// 5. Start libp2p Host (outbound on ephemeral UDP port)
