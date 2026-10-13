@@ -180,8 +180,6 @@ func cmdSign(args []string) {
 			switch strings.ToUpper(p) {
 			case "CLUSTERED_RTT", "POLICY_CLUSTERED_RTT":
 				cap.AllowedPolicies = append(cap.AllowedPolicies, identity.AuthorizedPolicy_POLICY_CLUSTERED_RTT)
-			case "TLS_SNI", "POLICY_TLS_SNI":
-				cap.AllowedPolicies = append(cap.AllowedPolicies, identity.AuthorizedPolicy_POLICY_TLS_SNI)
 			case "FAILOVER_STANDBY", "POLICY_FAILOVER_STANDBY":
 				cap.AllowedPolicies = append(cap.AllowedPolicies, identity.AuthorizedPolicy_POLICY_FAILOVER_STANDBY)
 			case "STRICT_SINGLETON", "POLICY_STRICT_SINGLETON":

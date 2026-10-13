@@ -1,0 +1,38 @@
+{
+  "edge_multiaddrs": [
+    "/ip4/203.0.113.10/udp/4002/quic-v1/p2p/12D3KooWEdgePeerID..."
+  ],
+  "services": [
+    {
+      "service_id": "web-api",
+      "protocol": "TCP",
+      "public_port": 443,
+      "policy": "CLUSTERED_RTT",
+      "sni_hostname": "api.example.com",
+      "target": "127.0.0.1:8080",
+      "enable_proxy_protocol": true
+    },
+    {
+      "service_id": "web-dashboard",
+      "protocol": "TCP",
+      "public_port": 443,
+      "policy": "FAILOVER_STANDBY",
+      "sni_hostname": "dash.example.com",
+      "target": "127.0.0.1:8081"
+    },
+    {
+      "service_id": "pbx-sip",
+      "protocol": "UDP",
+      "public_port": 5060,
+      "policy": "STRICT_SINGLETON",
+      "target": "127.0.0.1:5060"
+    },
+    {
+      "service_id": "minecraft-smp",
+      "protocol": "TCP",
+      "public_port": 25565,
+      "policy": "STRICT_SINGLETON",
+      "target": "minecraft.minecraft.svc.cluster.local:25565"
+    }
+  ]
+}

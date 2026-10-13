@@ -1,0 +1,31 @@
+{
+  "serial_number": 2,
+  "subject_id": "origin-node-01",
+  "role": "ORIGIN_NODE",
+  "libp2p_peer_id": "12D3KooWOriginPeerID...",
+  "validity_days": 365,
+  "capabilities": [
+    {
+      "service_pattern": "web-*",
+      "allowed_policies": ["CLUSTERED_RTT", "FAILOVER_STANDBY"],
+      "allowed_ports": [
+        {"start": 443, "end": 443}
+      ]
+    },
+    {
+      "service_pattern": "pbx-*",
+      "allowed_policies": ["STRICT_SINGLETON", "CLUSTERED_RTT"],
+      "allowed_ports": [
+        {"start": 5060, "end": 5060},
+        {"start": 10000, "end": 20000}
+      ]
+    },
+    {
+      "service_pattern": "minecraft-*",
+      "allowed_policies": ["STRICT_SINGLETON"],
+      "allowed_ports": [
+        {"start": 25565, "end": 25565}
+      ]
+    }
+  ]
+}

@@ -27,7 +27,20 @@ service:
 config:
   # The config JSON will be created as a ConfigMap
   edge_multiaddrs: []
+    # - "/ip4/203.0.113.10/udp/4002/quic-v1/p2p/12D3KooWEdgePeerID..."
   services: []
+    # - service_id: "web-api"
+    #   protocol: "TCP"
+    #   public_port: 443
+    #   policy: "CLUSTERED_RTT"
+    #   sni_hostname: "api.example.com"
+    #   target: "127.0.0.1:8080"
+    #   enable_proxy_protocol: true
+    # - service_id: "pbx-sip"
+    #   protocol: "UDP"
+    #   public_port: 5060
+    #   policy: "STRICT_SINGLETON"
+    #   target: "127.0.0.1:5060"
 
 # Secret containing the CA public key, origin manifest, identity key, and master key
 existingSecret: ""

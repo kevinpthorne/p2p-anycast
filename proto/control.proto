@@ -9,11 +9,15 @@ enum TransportProtocol {
   TCP_AND_UDP = 3;
 }
 
+enum DemuxMode {
+  DEMUX_PORT = 0;      // 1:1 public port binding (raw TCP/UDP)
+  DEMUX_TLS_SNI = 1;   // Shared public port demuxed via RFC 6066 SNI
+}
+
 enum RoutingPolicy {
   CLUSTERED_RTT = 0;      // RTT-optimized active/active across origins
-  TLS_SNI = 1;            // Demux shared port via RFC 6066 SNI
-  FAILOVER_STANDBY = 2;   // Primary/Backup promotion on lease timeout
-  STRICT_SINGLETON = 3;   // Fails closed on origin loss. Absolutely NO fallback.
+  FAILOVER_STANDBY = 1;   // Primary/Backup promotion on lease timeout
+  STRICT_SINGLETON = 2;   // Fails closed on origin loss. Absolutely NO fallback.
 }
 
 enum MessageType {
@@ -31,10 +35,11 @@ message ServiceRegistration {
   uint32 public_port = 6;         // Requested public port on the Edge
   RoutingPolicy policy = 7;
   
-  string sni_hostname = 8;        // Required if policy == TLS_SNI
+  string sni_hostname = 8;        // Hostname if demux_mode == DEMUX_TLS_SNI
   uint32 lease_duration_sec = 9;  // Soft-state lease TTL (default: 60)
   uint64 lease_epoch = 10;        // Fencing token for STRICT_SINGLETON
   bool enable_proxy_protocol = 11;// TCP: Inject PROXYv2 binary header
   
   bytes origin_hmac_capability = 12; // 16-byte HMAC preventing token swapping
+  DemuxMode demux_mode = 13;      // Ingress port demultiplexing strategy
 }

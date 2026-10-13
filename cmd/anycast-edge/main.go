@@ -134,8 +134,6 @@ func main() {
 		switch reg.Policy {
 		case control.RoutingPolicy_CLUSTERED_RTT:
 			authPolicy = identity.AuthorizedPolicy_POLICY_CLUSTERED_RTT
-		case control.RoutingPolicy_TLS_SNI:
-			authPolicy = identity.AuthorizedPolicy_POLICY_TLS_SNI
 		case control.RoutingPolicy_FAILOVER_STANDBY:
 			authPolicy = identity.AuthorizedPolicy_POLICY_FAILOVER_STANDBY
 		case control.RoutingPolicy_STRICT_SINGLETON:

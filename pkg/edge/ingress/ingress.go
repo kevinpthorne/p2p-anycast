@@ -198,12 +198,19 @@ func (r *Router) handleTCPConn(port uint32, clientConn net.Conn) {
 		return
 	}
 
-	policy := regs[0].Policy
-	var selectedReg *control.ServiceRegistration
+	// Check if this port uses SNI demuxing
+	isSNI := false
+	for _, reg := range regs {
+		if reg.DemuxMode == control.DemuxMode_DEMUX_TLS_SNI || reg.SniHostname != "" {
+			isSNI = true
+			break
+		}
+	}
+
+	var candidates []*control.ServiceRegistration
 	var peekedBytes []byte
 
-	switch policy {
-	case control.RoutingPolicy_TLS_SNI:
+	if isSNI {
 		// Read initial bytes to peek SNI
 		buf := make([]byte, 4096)
 		_ = clientConn.SetReadDeadline(time.Now().Add(5 * time.Second))
@@ -221,24 +228,31 @@ func (r *Router) handleTCPConn(port uint32, clientConn net.Conn) {
 			return
 		}
 
-		// Find registration matching SNI
+		// Collect all candidates matching SNI
 		for _, reg := range regs {
 			if reg.SniHostname == sniHost {
-				selectedReg = reg
-				break
+				candidates = append(candidates, reg)
 			}
 		}
 
-		if selectedReg == nil {
+		if len(candidates) == 0 {
 			resetTCP(clientConn)
 			return
 		}
+	} else {
+		candidates = regs
+	}
 
+	// Phase 2: Origin Selection / Dispatch Policy
+	var selectedReg *control.ServiceRegistration
+	policy := candidates[0].Policy
+
+	switch policy {
 	case control.RoutingPolicy_CLUSTERED_RTT:
-		selectedReg = r.selectLowestRTT(regs)
+		selectedReg = r.selectLowestRTT(candidates)
 
 	case control.RoutingPolicy_FAILOVER_STANDBY, control.RoutingPolicy_STRICT_SINGLETON:
-		selectedReg = regs[0]
+		selectedReg = candidates[0]
 	}
 
 	if selectedReg == nil {

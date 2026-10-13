@@ -68,14 +68,14 @@ in
                   description = "Public port requested on the Edge.";
                 };
                 policy = lib.mkOption {
-                  type = lib.types.enum [ "CLUSTERED_RTT" "TLS_SNI" "FAILOVER_STANDBY" "STRICT_SINGLETON" ];
+                  type = lib.types.enum [ "CLUSTERED_RTT" "FAILOVER_STANDBY" "STRICT_SINGLETON" ];
                   default = "CLUSTERED_RTT";
                   description = "Routing policy for this service.";
                 };
                 sni_hostname = lib.mkOption {
                   type = lib.types.str;
                   default = "";
-                  description = "SNI hostname (required if policy is TLS_SNI).";
+                  description = "SNI hostname (enables TLS SNI demuxing on shared ports).";
                 };
                 target = lib.mkOption {
                   type = lib.types.str;

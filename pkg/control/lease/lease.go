@@ -1,7 +1,6 @@
 package lease
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
 	"sync"
@@ -29,11 +28,21 @@ type LeaseRecord struct {
 	Active        bool
 }
 
+type leaseKey struct {
+	bindingID    [16]byte
+	originPeerID string
+}
+
+type singletonKey struct {
+	port        uint32
+	sniHostname string
+}
+
 type Manager struct {
 	mu           sync.RWMutex
-	records      map[[16]byte]*LeaseRecord // binding_id -> record
-	peerBindings map[string][][16]byte     // origin_peer_id -> binding_ids
-	portPolicies map[uint32]*singletonState
+	records      map[leaseKey]*LeaseRecord // (binding_id, origin_peer_id) -> record
+	peerBindings map[string][]leaseKey     // origin_peer_id -> leaseKeys
+	singletons   map[singletonKey]*singletonState
 	onRegister   func(reg *control.ServiceRegistration)
 	onEvict      func(reg *control.ServiceRegistration)
 	ticker       *time.Ticker
@@ -61,9 +70,9 @@ func NewManager(cfg Config) *Manager {
 	}
 
 	m := &Manager{
-		records:      make(map[[16]byte]*LeaseRecord),
-		peerBindings: make(map[string][][16]byte),
-		portPolicies: make(map[uint32]*singletonState),
+		records:      make(map[leaseKey]*LeaseRecord),
+		peerBindings: make(map[string][]leaseKey),
+		singletons:   make(map[singletonKey]*singletonState),
 		onRegister:   cfg.OnRegister,
 		onEvict:      cfg.OnEvict,
 		ticker:       time.NewTicker(reaperInterval),
@@ -87,6 +96,7 @@ func (m *Manager) Register(reg *control.ServiceRegistration) error {
 
 	var bID [16]byte
 	copy(bID[:], reg.BindingId)
+	key := leaseKey{bindingID: bID, originPeerID: reg.OriginPeerId}
 
 	ttl := time.Duration(reg.LeaseDurationSec) * time.Second
 	if ttl <= 0 {
@@ -95,9 +105,10 @@ func (m *Manager) Register(reg *control.ServiceRegistration) error {
 
 	now := time.Now()
 
-	// Enforce STRICT_SINGLETON fencing
+	// Enforce STRICT_SINGLETON fencing per (port, sniHostname)
 	if reg.Policy == control.RoutingPolicy_STRICT_SINGLETON {
-		state, exists := m.portPolicies[reg.PublicPort]
+		sKey := singletonKey{port: reg.PublicPort, sniHostname: reg.SniHostname}
+		state, exists := m.singletons[sKey]
 		if exists && state.activeOrigin != "" {
 			if state.activeOrigin == reg.OriginPeerId {
 				// Same origin updating
@@ -111,19 +122,16 @@ func (m *Manager) Register(reg *control.ServiceRegistration) error {
 					return fmt.Errorf("%w: current active epoch %d >= incoming epoch %d", ErrFencingEpochStale, state.activeEpoch, reg.LeaseEpoch)
 				}
 				// New origin has strictly higher epoch -> displace old origin
-				oldBID := state.bindingID
-				if oldRec, ok := m.records[oldBID]; ok {
-					delete(m.records, oldBID)
-					if m.onEvict != nil {
-						go m.onEvict(oldRec.Registration)
-					}
+				oldKey := leaseKey{bindingID: state.bindingID, originPeerID: state.activeOrigin}
+				if oldRec, ok := m.records[oldKey]; ok {
+					m.evictRecord(oldKey, oldRec)
 				}
 				state.activeOrigin = reg.OriginPeerId
 				state.activeEpoch = reg.LeaseEpoch
 				state.bindingID = bID
 			}
 		} else {
-			m.portPolicies[reg.PublicPort] = &singletonState{
+			m.singletons[sKey] = &singletonState{
 				activeOrigin: reg.OriginPeerId,
 				activeEpoch:  reg.LeaseEpoch,
 				bindingID:    bID,
@@ -131,15 +139,15 @@ func (m *Manager) Register(reg *control.ServiceRegistration) error {
 		}
 	}
 
-	rec, exists := m.records[bID]
+	rec, exists := m.records[key]
 	isNew := !exists
 	if isNew {
 		rec = &LeaseRecord{
 			Registration: reg,
 			Active:       true,
 		}
-		m.records[bID] = rec
-		m.peerBindings[reg.OriginPeerId] = append(m.peerBindings[reg.OriginPeerId], bID)
+		m.records[key] = rec
+		m.peerBindings[reg.OriginPeerId] = append(m.peerBindings[reg.OriginPeerId], key)
 	} else {
 		rec.Registration = reg
 		rec.Active = true
@@ -160,13 +168,10 @@ func (m *Manager) Heartbeat(originPeerID string, bindingID [16]byte, epoch uint6
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	rec, exists := m.records[bindingID]
+	key := leaseKey{bindingID: bindingID, originPeerID: originPeerID}
+	rec, exists := m.records[key]
 	if !exists {
 		return ErrRegistrationNotFound
-	}
-
-	if rec.Registration.OriginPeerId != originPeerID {
-		return errors.New("heartbeat peer ID mismatch")
 	}
 
 	// Enforce fencing epoch for singleton
@@ -195,16 +200,13 @@ func (m *Manager) Revoke(originPeerID string, bindingID [16]byte) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	rec, exists := m.records[bindingID]
+	key := leaseKey{bindingID: bindingID, originPeerID: originPeerID}
+	rec, exists := m.records[key]
 	if !exists {
 		return ErrRegistrationNotFound
 	}
 
-	if rec.Registration.OriginPeerId != originPeerID {
-		return errors.New("revoke origin peer ID mismatch")
-	}
-
-	m.evictRecord(bindingID, rec)
+	m.evictRecord(key, rec)
 	return nil
 }
 
@@ -213,13 +215,13 @@ func (m *Manager) EvictPeer(originPeerID string) []*control.ServiceRegistration 
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	bIDs := m.peerBindings[originPeerID]
+	keys := m.peerBindings[originPeerID]
 	var evicted []*control.ServiceRegistration
 
-	for _, bID := range bIDs {
-		if rec, ok := m.records[bID]; ok {
+	for _, key := range keys {
+		if rec, ok := m.records[key]; ok {
 			evicted = append(evicted, rec.Registration)
-			m.evictRecord(bID, rec)
+			m.evictRecord(key, rec)
 		}
 	}
 
@@ -227,13 +229,17 @@ func (m *Manager) EvictPeer(originPeerID string) []*control.ServiceRegistration 
 	return evicted
 }
 
-func (m *Manager) evictRecord(bID [16]byte, rec *LeaseRecord) {
-	delete(m.records, bID)
+func (m *Manager) evictRecord(key leaseKey, rec *LeaseRecord) {
+	delete(m.records, key)
+
+	var bID [16]byte
+	copy(bID[:], rec.Registration.BindingId)
 
 	// Clean up singleton tracking if applicable
 	if rec.Registration.Policy == control.RoutingPolicy_STRICT_SINGLETON {
-		if state, ok := m.portPolicies[rec.Registration.PublicPort]; ok && bytes.Equal(state.bindingID[:], bID[:]) {
-			delete(m.portPolicies, rec.Registration.PublicPort)
+		sKey := singletonKey{port: rec.Registration.PublicPort, sniHostname: rec.Registration.SniHostname}
+		if state, ok := m.singletons[sKey]; ok && state.activeOrigin == rec.Registration.OriginPeerId {
+			delete(m.singletons, sKey)
 		}
 	}
 
@@ -256,18 +262,18 @@ func (m *Manager) reaperLoop() {
 
 func (m *Manager) sweepExpired(now time.Time) {
 	m.mu.Lock()
-	var toEvict [][16]byte
+	var toEvict []leaseKey
 	var toEvictRecs []*LeaseRecord
 
-	for bID, rec := range m.records {
+	for key, rec := range m.records {
 		if now.After(rec.ExpiresAt) {
-			toEvict = append(toEvict, bID)
+			toEvict = append(toEvict, key)
 			toEvictRecs = append(toEvictRecs, rec)
 		}
 	}
 
-	for i, bID := range toEvict {
-		m.evictRecord(bID, toEvictRecs[i])
+	for i, key := range toEvict {
+		m.evictRecord(key, toEvictRecs[i])
 	}
 	m.mu.Unlock()
 }
@@ -286,14 +292,29 @@ func (m *Manager) GetRegistrationsForPort(port uint32) []*control.ServiceRegistr
 	return result
 }
 
-// GetRegistrationByBindingID returns the registration for a specific binding_id.
+// GetRegistrationByBindingID returns the first active registration for a specific binding_id.
 func (m *Manager) GetRegistrationByBindingID(bindingID [16]byte) (*control.ServiceRegistration, bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	rec, ok := m.records[bindingID]
-	if !ok {
-		return nil, false
+	for key, rec := range m.records {
+		if key.bindingID == bindingID {
+			return rec.Registration, true
+		}
 	}
-	return rec.Registration, true
+	return nil, false
+}
+
+// GetRegistrationsByBindingID returns all active registrations for a specific binding_id across all origins.
+func (m *Manager) GetRegistrationsByBindingID(bindingID [16]byte) []*control.ServiceRegistration {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	var result []*control.ServiceRegistration
+	for key, rec := range m.records {
+		if key.bindingID == bindingID {
+			result = append(result, rec.Registration)
+		}
+	}
+	return result
 }

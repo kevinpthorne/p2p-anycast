@@ -197,6 +197,11 @@ func (o *OriginNode) announceServicesToEdge(edgePeer peer.ID) {
 				bID := binding.DeriveBindingID(svc.ServiceID, svc.Protocol, svc.PublicPort, svc.SNIHostname)
 				token := binding.GenerateHMAC(o.originKey, edgePeer.String(), svc.PublicPort, bID)
 
+				demuxMode := control.DemuxMode_DEMUX_PORT
+				if svc.SNIHostname != "" {
+					demuxMode = control.DemuxMode_DEMUX_TLS_SNI
+				}
+
 				reg := &control.ServiceRegistration{
 					Type:                 control.MessageType_ANNOUNCE,
 					BindingId:            bID[:],
@@ -206,6 +211,7 @@ func (o *OriginNode) announceServicesToEdge(edgePeer peer.ID) {
 					PublicPort:           svc.PublicPort,
 					Policy:               svc.Policy,
 					SniHostname:          svc.SNIHostname,
+					DemuxMode:            demuxMode,
 					LeaseDurationSec:     60,
 					LeaseEpoch:           o.leaseEpoch,
 					EnableProxyProtocol:  svc.EnableProxyProtocol,
@@ -245,6 +251,11 @@ func (o *OriginNode) publishHeartbeats() {
 			bID := binding.DeriveBindingID(svc.ServiceID, svc.Protocol, svc.PublicPort, svc.SNIHostname)
 			token := binding.GenerateHMAC(o.originKey, edgePeer.String(), svc.PublicPort, bID)
 
+			demuxMode := control.DemuxMode_DEMUX_PORT
+			if svc.SNIHostname != "" {
+				demuxMode = control.DemuxMode_DEMUX_TLS_SNI
+			}
+
 			reg := &control.ServiceRegistration{
 				Type:                 control.MessageType_HEARTBEAT,
 				BindingId:            bID[:],
@@ -254,6 +265,7 @@ func (o *OriginNode) publishHeartbeats() {
 				PublicPort:           svc.PublicPort,
 				Policy:               svc.Policy,
 				SniHostname:          svc.SNIHostname,
+				DemuxMode:            demuxMode,
 				LeaseDurationSec:     60,
 				LeaseEpoch:           o.leaseEpoch,
 				EnableProxyProtocol:  svc.EnableProxyProtocol,

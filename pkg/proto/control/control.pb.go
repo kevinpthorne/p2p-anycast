@@ -73,28 +73,71 @@ func (TransportProtocol) EnumDescriptor() ([]byte, []int) {
 	return file_control_proto_rawDescGZIP(), []int{0}
 }
 
+type DemuxMode int32
+
+const (
+	DemuxMode_DEMUX_PORT    DemuxMode = 0 // 1:1 public port binding (raw TCP/UDP)
+	DemuxMode_DEMUX_TLS_SNI DemuxMode = 1 // Shared public port demuxed via RFC 6066 SNI
+)
+
+// Enum value maps for DemuxMode.
+var (
+	DemuxMode_name = map[int32]string{
+		0: "DEMUX_PORT",
+		1: "DEMUX_TLS_SNI",
+	}
+	DemuxMode_value = map[string]int32{
+		"DEMUX_PORT":    0,
+		"DEMUX_TLS_SNI": 1,
+	}
+)
+
+func (x DemuxMode) Enum() *DemuxMode {
+	p := new(DemuxMode)
+	*p = x
+	return p
+}
+
+func (x DemuxMode) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (DemuxMode) Descriptor() protoreflect.EnumDescriptor {
+	return file_control_proto_enumTypes[1].Descriptor()
+}
+
+func (DemuxMode) Type() protoreflect.EnumType {
+	return &file_control_proto_enumTypes[1]
+}
+
+func (x DemuxMode) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use DemuxMode.Descriptor instead.
+func (DemuxMode) EnumDescriptor() ([]byte, []int) {
+	return file_control_proto_rawDescGZIP(), []int{1}
+}
+
 type RoutingPolicy int32
 
 const (
 	RoutingPolicy_CLUSTERED_RTT    RoutingPolicy = 0 // RTT-optimized active/active across origins
-	RoutingPolicy_TLS_SNI          RoutingPolicy = 1 // Demux shared port via RFC 6066 SNI
-	RoutingPolicy_FAILOVER_STANDBY RoutingPolicy = 2 // Primary/Backup promotion on lease timeout
-	RoutingPolicy_STRICT_SINGLETON RoutingPolicy = 3 // Fails closed on origin loss. Absolutely NO fallback.
+	RoutingPolicy_FAILOVER_STANDBY RoutingPolicy = 1 // Primary/Backup promotion on lease timeout
+	RoutingPolicy_STRICT_SINGLETON RoutingPolicy = 2 // Fails closed on origin loss. Absolutely NO fallback.
 )
 
 // Enum value maps for RoutingPolicy.
 var (
 	RoutingPolicy_name = map[int32]string{
 		0: "CLUSTERED_RTT",
-		1: "TLS_SNI",
-		2: "FAILOVER_STANDBY",
-		3: "STRICT_SINGLETON",
+		1: "FAILOVER_STANDBY",
+		2: "STRICT_SINGLETON",
 	}
 	RoutingPolicy_value = map[string]int32{
 		"CLUSTERED_RTT":    0,
-		"TLS_SNI":          1,
-		"FAILOVER_STANDBY": 2,
-		"STRICT_SINGLETON": 3,
+		"FAILOVER_STANDBY": 1,
+		"STRICT_SINGLETON": 2,
 	}
 )
 
@@ -109,11 +152,11 @@ func (x RoutingPolicy) String() string {
 }
 
 func (RoutingPolicy) Descriptor() protoreflect.EnumDescriptor {
-	return file_control_proto_enumTypes[1].Descriptor()
+	return file_control_proto_enumTypes[2].Descriptor()
 }
 
 func (RoutingPolicy) Type() protoreflect.EnumType {
-	return &file_control_proto_enumTypes[1]
+	return &file_control_proto_enumTypes[2]
 }
 
 func (x RoutingPolicy) Number() protoreflect.EnumNumber {
@@ -122,7 +165,7 @@ func (x RoutingPolicy) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use RoutingPolicy.Descriptor instead.
 func (RoutingPolicy) EnumDescriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{1}
+	return file_control_proto_rawDescGZIP(), []int{2}
 }
 
 type MessageType int32
@@ -158,11 +201,11 @@ func (x MessageType) String() string {
 }
 
 func (MessageType) Descriptor() protoreflect.EnumDescriptor {
-	return file_control_proto_enumTypes[2].Descriptor()
+	return file_control_proto_enumTypes[3].Descriptor()
 }
 
 func (MessageType) Type() protoreflect.EnumType {
-	return &file_control_proto_enumTypes[2]
+	return &file_control_proto_enumTypes[3]
 }
 
 func (x MessageType) Number() protoreflect.EnumNumber {
@@ -171,7 +214,7 @@ func (x MessageType) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use MessageType.Descriptor instead.
 func (MessageType) EnumDescriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{2}
+	return file_control_proto_rawDescGZIP(), []int{3}
 }
 
 type ServiceRegistration struct {
@@ -183,11 +226,12 @@ type ServiceRegistration struct {
 	Protocol             TransportProtocol      `protobuf:"varint,5,opt,name=protocol,proto3,enum=p2panycast.control.v1.TransportProtocol" json:"protocol,omitempty"`
 	PublicPort           uint32                 `protobuf:"varint,6,opt,name=public_port,json=publicPort,proto3" json:"public_port,omitempty"` // Requested public port on the Edge
 	Policy               RoutingPolicy          `protobuf:"varint,7,opt,name=policy,proto3,enum=p2panycast.control.v1.RoutingPolicy" json:"policy,omitempty"`
-	SniHostname          string                 `protobuf:"bytes,8,opt,name=sni_hostname,json=sniHostname,proto3" json:"sni_hostname,omitempty"`                               // Required if policy == TLS_SNI
-	LeaseDurationSec     uint32                 `protobuf:"varint,9,opt,name=lease_duration_sec,json=leaseDurationSec,proto3" json:"lease_duration_sec,omitempty"`             // Soft-state lease TTL (default: 60)
-	LeaseEpoch           uint64                 `protobuf:"varint,10,opt,name=lease_epoch,json=leaseEpoch,proto3" json:"lease_epoch,omitempty"`                                // Fencing token for STRICT_SINGLETON
-	EnableProxyProtocol  bool                   `protobuf:"varint,11,opt,name=enable_proxy_protocol,json=enableProxyProtocol,proto3" json:"enable_proxy_protocol,omitempty"`   // TCP: Inject PROXYv2 binary header
-	OriginHmacCapability []byte                 `protobuf:"bytes,12,opt,name=origin_hmac_capability,json=originHmacCapability,proto3" json:"origin_hmac_capability,omitempty"` // 16-byte HMAC preventing token swapping
+	SniHostname          string                 `protobuf:"bytes,8,opt,name=sni_hostname,json=sniHostname,proto3" json:"sni_hostname,omitempty"`                                  // Hostname if demux_mode == DEMUX_TLS_SNI
+	LeaseDurationSec     uint32                 `protobuf:"varint,9,opt,name=lease_duration_sec,json=leaseDurationSec,proto3" json:"lease_duration_sec,omitempty"`                // Soft-state lease TTL (default: 60)
+	LeaseEpoch           uint64                 `protobuf:"varint,10,opt,name=lease_epoch,json=leaseEpoch,proto3" json:"lease_epoch,omitempty"`                                   // Fencing token for STRICT_SINGLETON
+	EnableProxyProtocol  bool                   `protobuf:"varint,11,opt,name=enable_proxy_protocol,json=enableProxyProtocol,proto3" json:"enable_proxy_protocol,omitempty"`      // TCP: Inject PROXYv2 binary header
+	OriginHmacCapability []byte                 `protobuf:"bytes,12,opt,name=origin_hmac_capability,json=originHmacCapability,proto3" json:"origin_hmac_capability,omitempty"`    // 16-byte HMAC preventing token swapping
+	DemuxMode            DemuxMode              `protobuf:"varint,13,opt,name=demux_mode,json=demuxMode,proto3,enum=p2panycast.control.v1.DemuxMode" json:"demux_mode,omitempty"` // Ingress port demultiplexing strategy
 	unknownFields        protoimpl.UnknownFields
 	sizeCache            protoimpl.SizeCache
 }
@@ -306,11 +350,18 @@ func (x *ServiceRegistration) GetOriginHmacCapability() []byte {
 	return nil
 }
 
+func (x *ServiceRegistration) GetDemuxMode() DemuxMode {
+	if x != nil {
+		return x.DemuxMode
+	}
+	return DemuxMode_DEMUX_PORT
+}
+
 var File_control_proto protoreflect.FileDescriptor
 
 const file_control_proto_rawDesc = "" +
 	"\n" +
-	"\rcontrol.proto\x12\x15p2panycast.control.v1\"\xb2\x04\n" +
+	"\rcontrol.proto\x12\x15p2panycast.control.v1\"\xf3\x04\n" +
 	"\x13ServiceRegistration\x126\n" +
 	"\x04type\x18\x01 \x01(\x0e2\".p2panycast.control.v1.MessageTypeR\x04type\x12\x1d\n" +
 	"\n" +
@@ -328,17 +379,22 @@ const file_control_proto_rawDesc = "" +
 	" \x01(\x04R\n" +
 	"leaseEpoch\x122\n" +
 	"\x15enable_proxy_protocol\x18\v \x01(\bR\x13enableProxyProtocol\x124\n" +
-	"\x16origin_hmac_capability\x18\f \x01(\fR\x14originHmacCapability*P\n" +
+	"\x16origin_hmac_capability\x18\f \x01(\fR\x14originHmacCapability\x12?\n" +
+	"\n" +
+	"demux_mode\x18\r \x01(\x0e2 .p2panycast.control.v1.DemuxModeR\tdemuxMode*P\n" +
 	"\x11TransportProtocol\x12\x18\n" +
 	"\x14PROTOCOL_UNSPECIFIED\x10\x00\x12\a\n" +
 	"\x03TCP\x10\x01\x12\a\n" +
 	"\x03UDP\x10\x02\x12\x0f\n" +
-	"\vTCP_AND_UDP\x10\x03*[\n" +
+	"\vTCP_AND_UDP\x10\x03*.\n" +
+	"\tDemuxMode\x12\x0e\n" +
+	"\n" +
+	"DEMUX_PORT\x10\x00\x12\x11\n" +
+	"\rDEMUX_TLS_SNI\x10\x01*N\n" +
 	"\rRoutingPolicy\x12\x11\n" +
-	"\rCLUSTERED_RTT\x10\x00\x12\v\n" +
-	"\aTLS_SNI\x10\x01\x12\x14\n" +
-	"\x10FAILOVER_STANDBY\x10\x02\x12\x14\n" +
-	"\x10STRICT_SINGLETON\x10\x03*6\n" +
+	"\rCLUSTERED_RTT\x10\x00\x12\x14\n" +
+	"\x10FAILOVER_STANDBY\x10\x01\x12\x14\n" +
+	"\x10STRICT_SINGLETON\x10\x02*6\n" +
 	"\vMessageType\x12\f\n" +
 	"\bANNOUNCE\x10\x00\x12\r\n" +
 	"\tHEARTBEAT\x10\x01\x12\n" +
@@ -357,23 +413,25 @@ func file_control_proto_rawDescGZIP() []byte {
 	return file_control_proto_rawDescData
 }
 
-var file_control_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
+var file_control_proto_enumTypes = make([]protoimpl.EnumInfo, 4)
 var file_control_proto_msgTypes = make([]protoimpl.MessageInfo, 1)
 var file_control_proto_goTypes = []any{
 	(TransportProtocol)(0),      // 0: p2panycast.control.v1.TransportProtocol
-	(RoutingPolicy)(0),          // 1: p2panycast.control.v1.RoutingPolicy
-	(MessageType)(0),            // 2: p2panycast.control.v1.MessageType
-	(*ServiceRegistration)(nil), // 3: p2panycast.control.v1.ServiceRegistration
+	(DemuxMode)(0),              // 1: p2panycast.control.v1.DemuxMode
+	(RoutingPolicy)(0),          // 2: p2panycast.control.v1.RoutingPolicy
+	(MessageType)(0),            // 3: p2panycast.control.v1.MessageType
+	(*ServiceRegistration)(nil), // 4: p2panycast.control.v1.ServiceRegistration
 }
 var file_control_proto_depIdxs = []int32{
-	2, // 0: p2panycast.control.v1.ServiceRegistration.type:type_name -> p2panycast.control.v1.MessageType
+	3, // 0: p2panycast.control.v1.ServiceRegistration.type:type_name -> p2panycast.control.v1.MessageType
 	0, // 1: p2panycast.control.v1.ServiceRegistration.protocol:type_name -> p2panycast.control.v1.TransportProtocol
-	1, // 2: p2panycast.control.v1.ServiceRegistration.policy:type_name -> p2panycast.control.v1.RoutingPolicy
-	3, // [3:3] is the sub-list for method output_type
-	3, // [3:3] is the sub-list for method input_type
-	3, // [3:3] is the sub-list for extension type_name
-	3, // [3:3] is the sub-list for extension extendee
-	0, // [0:3] is the sub-list for field type_name
+	2, // 2: p2panycast.control.v1.ServiceRegistration.policy:type_name -> p2panycast.control.v1.RoutingPolicy
+	1, // 3: p2panycast.control.v1.ServiceRegistration.demux_mode:type_name -> p2panycast.control.v1.DemuxMode
+	4, // [4:4] is the sub-list for method output_type
+	4, // [4:4] is the sub-list for method input_type
+	4, // [4:4] is the sub-list for extension type_name
+	4, // [4:4] is the sub-list for extension extendee
+	0, // [0:4] is the sub-list for field type_name
 }
 
 func init() { file_control_proto_init() }
@@ -386,7 +444,7 @@ func file_control_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_control_proto_rawDesc), len(file_control_proto_rawDesc)),
-			NumEnums:      3,
+			NumEnums:      4,
 			NumMessages:   1,
 			NumExtensions: 0,
 			NumServices:   0,

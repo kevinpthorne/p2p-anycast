@@ -70,9 +70,8 @@ enum NodeRole {
 
 enum AuthorizedPolicy {
   POLICY_CLUSTERED_RTT = 0;
-  POLICY_TLS_SNI = 1;
-  POLICY_FAILOVER_STANDBY = 2;
-  POLICY_STRICT_SINGLETON = 3;
+  POLICY_FAILOVER_STANDBY = 1;
+  POLICY_STRICT_SINGLETON = 2;
 }
 
 message PortRange {
@@ -152,11 +151,15 @@ enum TransportProtocol {
   TCP_AND_UDP = 3;
 }
 
+enum DemuxMode {
+  DEMUX_PORT = 0;      // 1:1 public port binding (raw TCP/UDP)
+  DEMUX_TLS_SNI = 1;   // Shared public port demuxed via RFC 6066 SNI
+}
+
 enum RoutingPolicy {
   CLUSTERED_RTT = 0;      // RTT-optimized active/active across origins
-  TLS_SNI = 1;            // Demux shared port via RFC 6066 SNI
-  FAILOVER_STANDBY = 2;   // Primary/Backup promotion on lease timeout
-  STRICT_SINGLETON = 3;   // Fails closed on origin loss. Absolutely NO fallback.
+  FAILOVER_STANDBY = 1;   // Primary/Backup promotion on lease timeout
+  STRICT_SINGLETON = 2;   // Fails closed on origin loss. Absolutely NO fallback.
 }
 
 enum MessageType {
@@ -174,12 +177,13 @@ message ServiceRegistration {
   uint32 public_port = 6;         // Requested public port on the Edge
   RoutingPolicy policy = 7;
   
-  string sni_hostname = 8;        // Required if policy == TLS_SNI
+  string sni_hostname = 8;        // Hostname if demux_mode == DEMUX_TLS_SNI
   uint32 lease_duration_sec = 9;  // Soft-state lease TTL (default: 60)
   uint64 lease_epoch = 10;        // Fencing token for STRICT_SINGLETON
   bool enable_proxy_protocol = 11;// TCP: Inject PROXYv2 binary header
   
   bytes origin_hmac_capability = 12; // 16-byte HMAC preventing token swapping
+  DemuxMode demux_mode = 13;      // Ingress port demultiplexing strategy
 }
 
 ```
@@ -212,13 +216,19 @@ The Origin generates this token per Edge during registration. If an Edge forward
          ├─── TCP Connect (0.0.0.0:<Port>)
          │          │
          │          ▼
-         │   [ Inspect Registry for Port ]
+         │   [ Phase 1: Ingress Demux ]
          │          │
-         │          ├─► Policy == TLS_SNI ──────► Peek TLS ClientHello -> Extract SNI
-         │          │                             Lookup binding_id by (Port, SNI)
+         │          ├─► DemuxMode == DEMUX_TLS_SNI ──► Peek TLS ClientHello -> Extract SNI
+         │          │                                  Filter candidate pool by (Port, SNI)
          │          │
-         │          └─► Policy == CLUSTERED_RTT ─► Select Origin by lowest libp2p Ping
-         │                                        Lookup binding_id by Port
+         │          └─► DemuxMode == DEMUX_PORT ─────► Candidate pool = all registrations on Port
+         │          │
+         │          ▼
+         │   [ Phase 2: Origin Dispatch ]
+         │          │
+         │          ├─► Policy == CLUSTERED_RTT ──────► Select lowest libp2p Ping RTT
+         │          ├─► Policy == FAILOVER_STANDBY ──► Select active primary origin
+         │          └─► Policy == STRICT_SINGLETON ──► Select fenced monotonic epoch origin
          │          │
          │          ▼
          │   Open libp2p Stream (/p2p-anycast/tcp/1.0.0)
@@ -365,12 +375,20 @@ Because incoming UDP datagrams are connectionless, return packets from local ser
 
 ## 6. Routing Policy Matrix
 
+Ingress routing operates across two decoupled dimensions:
+
+### 6.1 Ingress Demultiplexing (`DemuxMode`)
+| Mode | Value | Mechanism | Port Sharing |
+| --- | :---: | --- | --- |
+| `DEMUX_PORT` | `0` | Direct 1:1 public port binding (raw TCP/UDP). | Dedicated per public port. |
+| `DEMUX_TLS_SNI` | `1` | Zero-allocation TLS ClientHello peek -> RFC 6066 SNI extraction. | Multi-tenant hostnames on shared public port (e.g. 443). |
+
+### 6.2 Origin Dispatch Policy (`RoutingPolicy`)
 | Policy | Clustered? | Failover Mechanics | Edge Action on Origin Loss | Primary Use Case |
-| --- | --- | --- | --- | --- |
-| `CLUSTERED_RTT` | **Yes** | Active/Active: Dynamic per-packet/stream reroute to lowest RTT peer. | Divert in-flight traffic to next best healthy Origin RTT. | Stateless HTTP, public game server lobbies, DNS. |
-| `TLS_SNI` | **Yes** (by hostname) | Dedicated path per SNI string. | If specific SNI origin dies, emit TCP `RST`. Other SNIs unaffected. | Multi-tenant HTTPS, Secure WebSockets. |
+| --- | :---: | --- | --- | --- |
+| `CLUSTERED_RTT` | **Yes** | Active/Active: Dynamic per-packet/stream reroute to lowest RTT peer. | Divert in-flight traffic to next best healthy Origin RTT. | Stateless HTTP, clustered TLS SNI pools, DNS, game lobbies. |
 | `FAILOVER_STANDBY` | **Yes** (1 Active, N Standby) | Active/Passive: Secondary promoted if primary misses 3 heartbeats. | Promote standby peer; flush stale TCP streams. | Stateful systems with external replication / shared block storage. |
-| `STRICT_SINGLETON` | **NO** (Strictly 1) | **Fail-Closed:** Under no circumstances reroute traffic. | **Immediate Socket Drop:** Unbind port or send TCP `RST`/drop UDP. | **VoIP PBX (Asterisk/Kamailio)**, anti-split-brain state engines. |
+| `STRICT_SINGLETON` | **NO** (Strictly 1) | **Fail-Closed:** Monotonic epoch fencing. Under no circumstances reroute. | **Immediate Socket Drop:** Unbind port or send TCP `RST`/drop UDP. | **VoIP PBX (Asterisk/Kamailio)**, anti-split-brain state engines. |
 
 ---
 

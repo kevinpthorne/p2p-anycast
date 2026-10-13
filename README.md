@@ -80,14 +80,22 @@ The design enforces strict constraints that guarantee portability, zero privileg
 
 ---
 
-## Routing Policy Matrix
+## Routing Architecture & Policy Matrix
 
+Ingress routing decouples **Ingress Demultiplexing (`DemuxMode`)** from **Origin Selection Policy (`RoutingPolicy`)**:
+
+### Ingress Demultiplexing (`DemuxMode`)
+| Mode | Value | Mechanism | Description |
+| :--- | :---: | :--- | :--- |
+| `DEMUX_PORT` | `0` | Direct 1:1 public port binding | Standard raw TCP/UDP port mapping. |
+| `DEMUX_TLS_SNI` | `1` | RFC 6066 TLS ClientHello peek | Multi-tenant hostname demuxing on shared ports (e.g. 443). |
+
+### Origin Dispatch Policy (`RoutingPolicy`)
 | Policy | Clustered? | Failover Mechanics | Edge Action on Origin Loss | Primary Use Case |
 | :--- | :---: | :--- | :--- | :--- |
-| `CLUSTERED_RTT` | **Yes** | Active/Active: Dynamic per-packet/stream reroute to lowest RTT peer. | Diverts in-flight traffic to next best healthy Origin RTT. | Stateless HTTP, game server lobbies, DNS. |
-| `TLS_SNI` | **Yes** (by hostname) | Dedicated path per SNI string on a shared public port. | If specific SNI origin dies, emit TCP `RST`. Other SNIs unaffected. | Multi-tenant HTTPS, Secure WebSockets. |
+| `CLUSTERED_RTT` | **Yes** | Active/Active: Dynamic per-packet/stream reroute to lowest RTT peer. | Diverts in-flight traffic to next best healthy Origin RTT. | Stateless HTTP, clustered TLS SNI origins, game server lobbies, DNS. |
 | `FAILOVER_STANDBY` | **Yes** (1 Active, N Standby) | Active/Passive: Secondary promoted if primary misses 3 heartbeats. | Promotes standby peer; flushes stale TCP streams. | Stateful systems with external replication / shared storage. |
-| `STRICT_SINGLETON` | **NO** (Strictly 1) | **Fail-Closed:** Under no circumstances reroute traffic. | **Immediate Socket Drop:** Closes listener or sends TCP `RST` / drops UDP. | **VoIP PBX (Asterisk/Kamailio)**, anti-split-brain state engines. |
+| `STRICT_SINGLETON` | **NO** (Strictly 1) | **Fail-Closed:** Monotonic epoch fencing. Under no circumstances reroute. | **Immediate Socket Drop:** Closes listener or sends TCP `RST` / drops UDP. | **VoIP PBX (Asterisk/Kamailio)**, anti-split-brain state engines. |
 
 ---
 
@@ -301,6 +309,13 @@ Sign the Edge manifest:
   "validity_days": 365,
   "capabilities": [
     {
+      "service_pattern": "web-*",
+      "allowed_policies": ["CLUSTERED_RTT", "FAILOVER_STANDBY"],
+      "allowed_ports": [
+        {"start": 443, "end": 443}
+      ]
+    },
+    {
       "service_pattern": "pbx-*",
       "allowed_policies": ["STRICT_SINGLETON", "CLUSTERED_RTT"],
       "allowed_ports": [
@@ -357,6 +372,23 @@ Create `origin_config.json`:
     "/ip4/203.0.113.10/udp/4002/quic-v1/p2p/12D3KooWEdgePeerID..."
   ],
   "services": [
+    {
+      "service_id": "web-api",
+      "protocol": "TCP",
+      "public_port": 443,
+      "policy": "CLUSTERED_RTT",
+      "sni_hostname": "api.example.com",
+      "target": "127.0.0.1:8080",
+      "enable_proxy_protocol": true
+    },
+    {
+      "service_id": "web-dashboard",
+      "protocol": "TCP",
+      "public_port": 443,
+      "policy": "FAILOVER_STANDBY",
+      "sni_hostname": "dash.example.com",
+      "target": "127.0.0.1:8081"
+    },
     {
       "service_id": "pbx-sip",
       "protocol": "UDP",
@@ -475,6 +507,15 @@ Both modules support an inline `manifestKey` string option (base64) so the manif
                 "/ip4/203.0.113.10/udp/4002/quic-v1/p2p/12D3KooWEdgePeerID..."
               ];
               services = [
+                {
+                  service_id = "web-api";
+                  protocol = "TCP";
+                  public_port = 443;
+                  policy = "CLUSTERED_RTT";
+                  sni_hostname = "api.example.com";
+                  target = "127.0.0.1:8080";
+                  enable_proxy_protocol = true;
+                }
                 {
                   service_id = "pbx-sip";
                   protocol = "UDP";

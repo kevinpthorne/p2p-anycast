@@ -10,9 +10,8 @@ enum NodeRole {
 
 enum AuthorizedPolicy {
   POLICY_CLUSTERED_RTT = 0;
-  POLICY_TLS_SNI = 1;
-  POLICY_FAILOVER_STANDBY = 2;
-  POLICY_STRICT_SINGLETON = 3;
+  POLICY_FAILOVER_STANDBY = 1;
+  POLICY_STRICT_SINGLETON = 2;
 }
 
 message PortRange {

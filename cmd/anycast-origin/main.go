@@ -35,7 +35,7 @@ type ServiceConfigJSON struct {
 	ServiceID           string `json:"service_id"`
 	Protocol            string `json:"protocol"` // "TCP", "UDP", "TCP_AND_UDP"
 	PublicPort          uint32 `json:"public_port"`
-	Policy              string `json:"policy"` // "CLUSTERED_RTT", "TLS_SNI", "FAILOVER_STANDBY", "STRICT_SINGLETON"
+	Policy              string `json:"policy"` // "CLUSTERED_RTT", "FAILOVER_STANDBY", "STRICT_SINGLETON"
 	SNIHostname         string `json:"sni_hostname"`
 	Target              string `json:"target"` // "127.0.0.1:5060", "cluster.svc:25565", or "unix:///path"
 	EnableProxyProtocol bool   `json:"enable_proxy_protocol"`
@@ -151,8 +151,6 @@ func main() {
 		switch strings.ToUpper(s.Policy) {
 		case "CLUSTERED_RTT":
 			policy = control.RoutingPolicy_CLUSTERED_RTT
-		case "TLS_SNI":
-			policy = control.RoutingPolicy_TLS_SNI
 		case "FAILOVER_STANDBY":
 			policy = control.RoutingPolicy_FAILOVER_STANDBY
 		case "STRICT_SINGLETON":
