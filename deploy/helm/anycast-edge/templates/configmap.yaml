@@ -1,0 +1,14 @@
+{{- if not .Values.existingConfigMap }}
+{{- $caPub := or (and .Values.publicValues .Values.publicValues.caPub) (and .Values.public .Values.public.caPub) (and .Values.secrets .Values.secrets.caPub) "" }}
+{{- $manifest := or (and .Values.publicValues .Values.publicValues.manifestBase64) (and .Values.public .Values.public.manifestBase64) (and .Values.secrets .Values.secrets.manifestBase64) "" }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "anycast-edge.fullname" . }}-config
+  labels:
+    {{- include "anycast-edge.labels" . | nindent 4 }}
+data:
+  ca.pub: {{ $caPub | quote }}
+binaryData:
+  edge_manifest.pb: {{ $manifest | quote }}
+{{- end }}

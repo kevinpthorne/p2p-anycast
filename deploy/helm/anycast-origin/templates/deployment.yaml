@@ -15,12 +15,12 @@ spec:
       {{- include "anycast-origin.selectorLabels" . | nindent 6 }}
   template:
     metadata:
-      {{- with .Values.podAnnotations }}
       annotations:
-        # Roll deployment on config change
         checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+        {{- with .Values.podAnnotations }}
         {{- toYaml . | nindent 8 }}
-      {{- end }}
+        {{- end }}
       labels:
         {{- include "anycast-origin.selectorLabels" . | nindent 8 }}
     spec:
@@ -41,8 +41,8 @@ spec:
             - /bin/anycast-origin
           args:
             - -config=/etc/anycast/config/origin_config.json
-            - -manifest=/etc/anycast/secrets/origin_manifest.pb
-            - -ca-pub=/etc/anycast/secrets/ca.pub
+            - -manifest=/etc/anycast/config/origin_manifest.pb
+            - -ca-pub=/etc/anycast/config/ca.pub
             {{- if .Values.identity.pvc.enabled }}
             - -identity-key=/var/lib/anycast/identity/identity.key
             {{- else }}
@@ -77,7 +77,7 @@ spec:
       volumes:
         - name: anycast-config
           configMap:
-            name: {{ include "anycast-origin.fullname" . }}-config
+            name: {{ if .Values.existingConfigMap }}{{ .Values.existingConfigMap }}{{ else }}{{ include "anycast-origin.fullname" . }}-config{{ end }}
         - name: anycast-secrets
           secret:
             secretName: {{ if .Values.existingSecret }}{{ .Values.existingSecret }}{{ else }}{{ include "anycast-origin.fullname" . }}-secrets{{ end }}

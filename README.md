@@ -267,7 +267,7 @@ Or compute it offline from an existing ECDSA P-256 key using any libp2p tool. Th
 
 ### 3. Generate Node Manifests
 
-Manifests are signed by the Root CA and bind a Peer ID to a set of capabilities. By default `anycast-ca sign` outputs **base64 text**, which can be embedded directly as a string in NixOS configs, environment variables, or Kubernetes secrets.
+Manifests are signed by the Root CA and bind a Peer ID to a set of capabilities. By default `anycast-ca sign` outputs **base64 text**, which can be embedded directly as a string in NixOS configs, environment variables, or Kubernetes ConfigMaps / secrets.
 
 #### Edge Router Policy (`edge_policy.json`)
 
@@ -523,6 +523,39 @@ metadata:
 | `p2p-anycast.io/enable-proxy-protocol` | Inject PROXYv2 binary header on TCP streams. | `"false"` |
 | `p2p-anycast.io/ports` | Comma-separated list of port names/numbers to expose on multi-port services. | All ports |
 
+---
+
+### 7. Kubernetes Deployment (Helm Charts)
+
+MeshCast provides production Helm charts located under `deploy/helm/anycast-edge` and `deploy/helm/anycast-origin`.
+
+Public configuration values are stored in and mounted from a `ConfigMap` (`/etc/anycast/config`), while private credentials are kept strictly isolated in a Kubernetes `Secret` (`/etc/anycast/secrets`).
+
+#### Public vs Secret Separation
+
+| Value | Storage | Mounted Path | Purpose |
+| --- | --- | --- | --- |
+| `ca.pub` | `ConfigMap` | `/etc/anycast/config/ca.pub` | Public Root CA public key (PEM) |
+| `origin_manifest.pb` / `edge_manifest.pb` | `ConfigMap` | `/etc/anycast/config/<role>_manifest.pb` | Signed capability manifest (public capabilities & CA signature) |
+| `origin_config.json` | `ConfigMap` | `/etc/anycast/config/origin_config.json` | Public edge multiaddrs & service forwarding mapping |
+| `identity.key` | `Secret` (or PVC) | `/etc/anycast/secrets/identity.key` | Private node identity key |
+| `master.key` | `Secret` | `/etc/anycast/secrets/master.key` | 256-bit private master HMAC key (Origin only) |
+
+#### Deploying with Helm
+
+```bash
+# Deploy anycast-origin
+helm install my-origin ./deploy/helm/anycast-origin \
+  --set publicValues.caPub="$(cat ca.pub)" \
+  --set publicValues.manifestBase64="$(cat origin_manifest.pb64)" \
+  --set secrets.identityKey="$(cat identity.key)" \
+  --set secrets.masterKey="$(cat master.key)"
+
+# Or mount pre-existing ConfigMap and Secret:
+helm install my-origin ./deploy/helm/anycast-origin \
+  --set existingConfigMap="my-origin-public-config" \
+  --set existingSecret="my-origin-private-keys"
+```
 
 ---
 

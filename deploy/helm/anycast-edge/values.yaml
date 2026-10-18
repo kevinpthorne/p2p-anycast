@@ -36,13 +36,18 @@ config:
   listenP2p: "/ip4/0.0.0.0/udp/4002/quic-v1"
   firewall: "none" # "auto", "iptables", "nftables", "none"
 
-# Secret containing the CA public key, edge manifest, and identity key
+# ConfigMap containing public values: CA public key and edge manifest
+existingConfigMap: ""
+# If existingConfigMap is not provided, the chart will look for these public values to populate the ConfigMap
+publicValues:
+  caPub: ""          # string: PEM encoded CA public key
+  manifestBase64: "" # string: Base64 encoded manifest.pb or raw text manifest
+
+# Secret containing secret/private values: identity key
 existingSecret: ""
 # If existingSecret is not provided, the chart will look for these values to create a secret
 secrets:
-  caPub: ""        # string: PEM encoded CA public key
-  manifestBase64: "" # string: Base64 encoded manifest.pb or raw text manifest
-  identityKey: ""  # string: Hardware/filesystem identity key content
+  identityKey: ""    # string: Hardware/filesystem identity key content
 
 resources: {}
 nodeSelector: {}

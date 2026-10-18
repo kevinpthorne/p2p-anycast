@@ -57,14 +57,19 @@ rbac:
   # Create Role/ClusterRole and RoleBinding/ClusterRoleBinding for K8s service and TLSRoute discovery
   create: true
 
-# Secret containing the CA public key, origin manifest, identity key, and master key
+# ConfigMap containing public values: CA public key, origin manifest, and origin_config.json
+existingConfigMap: ""
+# If existingConfigMap is not provided, the chart will look for these public values to populate the ConfigMap
+publicValues:
+  caPub: ""          # string: PEM encoded CA public key
+  manifestBase64: "" # string: Base64 encoded manifest.pb or raw text manifest
+
+# Secret containing secret/private values: identity key and master key
 existingSecret: ""
 # If existingSecret is not provided, the chart will look for these values to create a secret
 secrets:
-  caPub: ""        # string: PEM encoded CA public key
-  manifestBase64: "" # string: Base64 encoded manifest.pb or raw text manifest
-  identityKey: ""  # string: Hardware/filesystem identity key content
-  masterKey: ""    # string: 256-bit master key in hex
+  identityKey: ""    # string: Hardware/filesystem identity key content
+  masterKey: ""      # string: 256-bit master key in hex
 
 resources: {}
 nodeSelector: {}
