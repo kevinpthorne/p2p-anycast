@@ -13,7 +13,11 @@ data:
       "edge_multiaddrs": {{ toJson .Values.config.edge_multiaddrs }},
       "services": {{ toJson .Values.config.services }}
     }
+  {{- if $caPub }}
   ca.pub: {{ $caPub | quote }}
+  {{- end }}
+{{- if $manifest }}
 binaryData:
   origin_manifest.pb: {{ $manifest | quote }}
+{{- end }}
 {{- end }}

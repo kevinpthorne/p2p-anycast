@@ -7,8 +7,14 @@ metadata:
   name: {{ include "anycast-edge.fullname" . }}-config
   labels:
     {{- include "anycast-edge.labels" . | nindent 4 }}
+{{- if or $caPub $manifest }}
+{{- if $caPub }}
 data:
   ca.pub: {{ $caPub | quote }}
+{{- end }}
+{{- if $manifest }}
 binaryData:
   edge_manifest.pb: {{ $manifest | quote }}
+{{- end }}
+{{- end }}
 {{- end }}

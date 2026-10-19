@@ -43,8 +43,20 @@ spec:
           {{- end }}
           args:
             - -config=/etc/anycast/config/origin_config.json
+            {{- if or .Values.existingConfigMap (and .Values.publicValues .Values.publicValues.manifestBase64) (and .Values.public .Values.public.manifestBase64) }}
             - -manifest=/etc/anycast/config/origin_manifest.pb
+            {{- else if .Values.existingSecret }}
+            - -manifest=/etc/anycast/secrets/origin_manifest.pb
+            {{- else }}
+            - -manifest=/etc/anycast/config/origin_manifest.pb
+            {{- end }}
+            {{- if or .Values.existingConfigMap (and .Values.publicValues .Values.publicValues.caPub) (and .Values.public .Values.public.caPub) }}
             - -ca-pub=/etc/anycast/config/ca.pub
+            {{- else if .Values.existingSecret }}
+            - -ca-pub=/etc/anycast/secrets/ca.pub
+            {{- else }}
+            - -ca-pub=/etc/anycast/config/ca.pub
+            {{- end }}
             {{- if .Values.identity.pvc.enabled }}
             - -identity-key=/var/lib/anycast/identity/identity.key
             {{- else }}
