@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"log"
 	"net"
 	"sync"
 	"sync/atomic"
@@ -223,7 +224,9 @@ func (f *EdgeDatagramForwarder) StartDatagramReceiver(conn network.Conn) {
 				return // Connection closed or context cancelled
 			}
 
-			_ = f.HandleReturnDatagram(data)
+			if err := f.HandleReturnDatagram(data); err != nil {
+				log.Printf("[Forwarder] Failed to handle return UDP datagram: %v", err)
+			}
 		}
 	}()
 }

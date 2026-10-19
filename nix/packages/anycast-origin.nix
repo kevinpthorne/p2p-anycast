@@ -2,7 +2,7 @@
 
 buildGoModule {
   pname = "anycast-origin";
-  version = "0.7.0";
+  version = "0.7.2";
   src = ../..;
   subPackages = [ "cmd/anycast-origin" ];
   vendorHash = null;

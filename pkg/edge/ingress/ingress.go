@@ -175,16 +175,24 @@ func (r *Router) SyncPortListener(port uint32) {
 
 	// Synchronize firewall rules outside of r.mu lock
 	if openTCP {
-		_ = r.firewall.OpenPort(firewall.ProtocolTCP, uint16(port))
+		if err := r.firewall.OpenPort(firewall.ProtocolTCP, uint16(port)); err != nil {
+			log.Printf("[Ingress] Failed to open firewall TCP port %d: %v", port, err)
+		}
 	}
 	if closeTCP {
-		_ = r.firewall.ClosePort(firewall.ProtocolTCP, uint16(port))
+		if err := r.firewall.ClosePort(firewall.ProtocolTCP, uint16(port)); err != nil {
+			log.Printf("[Ingress] Failed to close firewall TCP port %d: %v", port, err)
+		}
 	}
 	if openUDP {
-		_ = r.firewall.OpenPort(firewall.ProtocolUDP, uint16(port))
+		if err := r.firewall.OpenPort(firewall.ProtocolUDP, uint16(port)); err != nil {
+			log.Printf("[Ingress] Failed to open firewall UDP port %d: %v", port, err)
+		}
 	}
 	if closeUDP {
-		_ = r.firewall.ClosePort(firewall.ProtocolUDP, uint16(port))
+		if err := r.firewall.ClosePort(firewall.ProtocolUDP, uint16(port)); err != nil {
+			log.Printf("[Ingress] Failed to close firewall UDP port %d: %v", port, err)
+		}
 	}
 }
 
@@ -341,7 +349,9 @@ func (r *Router) acceptUDP(port uint32, uln *net.UDPConn) {
 		packetData := make([]byte, n)
 		copy(packetData, buf[:n])
 
-		_ = r.forwarder.ForwardPacket(originPeer, bindingID, hmacToken, clientAddr, uln, packetData)
+		if err := r.forwarder.ForwardPacket(originPeer, bindingID, hmacToken, clientAddr, uln, packetData); err != nil {
+			log.Printf("[Ingress] Failed to forward UDP packet on port %d to origin %s: %v", port, originPeer, err)
+		}
 	}
 }
 

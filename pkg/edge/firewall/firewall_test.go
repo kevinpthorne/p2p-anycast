@@ -148,6 +148,47 @@ func TestNftablesManager(t *testing.T) {
 	}
 }
 
+func TestNftablesManagerNixOS(t *testing.T) {
+	mock := &mockRunner{}
+	mgr, err := newNftablesManagerWithTable(mock.Run, "nixos-fw")
+	if err != nil {
+		t.Fatalf("unexpected error creating nftables manager for nixos-fw: %v", err)
+	}
+
+	// Verify sets initialized in nixos-fw table
+	if !mock.hasCommand("nft add set inet nixos-fw anycast_tcp") {
+		t.Errorf("expected nft add set tcp in nixos-fw")
+	}
+	if !mock.hasCommand("nft add set inet nixos-fw anycast_udp") {
+		t.Errorf("expected nft add set udp in nixos-fw")
+	}
+
+	// Verify rules are inserted into chain 'input' (NOT 'input-allow')
+	if !mock.hasCommand("nft insert rule inet nixos-fw input tcp dport @anycast_tcp accept") {
+		t.Errorf("expected nft insert rule into chain input for tcp")
+	}
+	if !mock.hasCommand("nft insert rule inet nixos-fw input udp dport @anycast_udp accept") {
+		t.Errorf("expected nft insert rule into chain input for udp")
+	}
+	if mock.hasCommand("input-allow") {
+		t.Errorf("unexpected reference to non-existent input-allow chain")
+	}
+
+	// Cleanup should flush sets instead of deleting table
+	if err := mgr.Close(); err != nil {
+		t.Fatalf("Close failed: %v", err)
+	}
+	if !mock.hasCommand("nft flush set inet nixos-fw anycast_tcp") {
+		t.Errorf("expected flush set anycast_tcp")
+	}
+	if !mock.hasCommand("nft flush set inet nixos-fw anycast_udp") {
+		t.Errorf("expected flush set anycast_udp")
+	}
+	if mock.hasCommand("nft delete table inet nixos-fw") {
+		t.Errorf("should not delete nixos-fw table")
+	}
+}
+
 func TestNoopManager(t *testing.T) {
 	mgr := NewNoopManager()
 	if err := mgr.OpenPort(ProtocolTCP, 80); err != nil {

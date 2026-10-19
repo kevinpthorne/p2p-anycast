@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strings"
 	"sync"
 	"time"
 )
@@ -66,16 +67,42 @@ func (m *NftablesManager) init(ctx context.Context) error {
 	}
 
 	// Create sets for TCP and UDP services
-	_, _ = m.runner(ctx, "nft", "add", "set", "inet", m.tableName, "anycast_tcp", "{ type inet_service; }")
-	_, _ = m.runner(ctx, "nft", "add", "set", "inet", m.tableName, "anycast_udp", "{ type inet_service; }")
+	if out, err := m.runner(ctx, "nft", "add", "set", "inet", m.tableName, "anycast_tcp", "{ type inet_service; }"); err != nil {
+		log.Printf("[Firewall] Warning: adding anycast_tcp set in table %s: %v (output: %s)", m.tableName, err, string(out))
+	}
+	if out, err := m.runner(ctx, "nft", "add", "set", "inet", m.tableName, "anycast_udp", "{ type inet_service; }"); err != nil {
+		log.Printf("[Firewall] Warning: adding anycast_udp set in table %s: %v (output: %s)", m.tableName, err, string(out))
+	}
 
-	if m.isStandalone {
-		_, _ = m.runner(ctx, "nft", "add", "rule", "inet", m.tableName, "input", "tcp", "dport", "@anycast_tcp", "accept")
-		_, _ = m.runner(ctx, "nft", "add", "rule", "inet", m.tableName, "input", "udp", "dport", "@anycast_udp", "accept")
-	} else {
-		// Hook into NixOS input-allow chain
-		_, _ = m.runner(ctx, "nft", "add", "rule", "inet", m.tableName, "input-allow", "tcp", "dport", "@anycast_tcp", "accept")
-		_, _ = m.runner(ctx, "nft", "add", "rule", "inet", m.tableName, "input-allow", "udp", "dport", "@anycast_udp", "accept")
+	chainName := "input"
+	// Check if rules are already present in chain input to prevent duplicates across restarts
+	out, _ := m.runner(ctx, "nft", "list", "chain", "inet", m.tableName, chainName)
+	chainContent := string(out)
+
+	if !strings.Contains(chainContent, "@anycast_tcp") {
+		var err error
+		if m.isStandalone {
+			_, err = m.runner(ctx, "nft", "add", "rule", "inet", m.tableName, chainName, "tcp", "dport", "@anycast_tcp", "accept")
+		} else {
+			// In NixOS nixos-fw table, insert at the beginning of chain input so it precedes reject/drop rules
+			_, err = m.runner(ctx, "nft", "insert", "rule", "inet", m.tableName, chainName, "tcp", "dport", "@anycast_tcp", "accept")
+		}
+		if err != nil {
+			log.Printf("[Firewall] Warning: failed to add tcp rule in table %s chain %s: %v", m.tableName, chainName, err)
+		}
+	}
+
+	if !strings.Contains(chainContent, "@anycast_udp") {
+		var err error
+		if m.isStandalone {
+			_, err = m.runner(ctx, "nft", "add", "rule", "inet", m.tableName, chainName, "udp", "dport", "@anycast_udp", "accept")
+		} else {
+			// In NixOS nixos-fw table, insert at the beginning of chain input so it precedes reject/drop rules
+			_, err = m.runner(ctx, "nft", "insert", "rule", "inet", m.tableName, chainName, "udp", "dport", "@anycast_udp", "accept")
+		}
+		if err != nil {
+			log.Printf("[Firewall] Warning: failed to add udp rule in table %s chain %s: %v", m.tableName, chainName, err)
+		}
 	}
 
 	return nil
@@ -105,8 +132,8 @@ func (m *NftablesManager) OpenPort(proto Protocol, port uint16) error {
 	}
 
 	elem := fmt.Sprintf("{ %d }", port)
-	if _, err := m.runner(ctx, "nft", "add", "element", "inet", m.tableName, setName, elem); err != nil {
-		return fmt.Errorf("failed to add nft element %s to %s: %w", elem, setName, err)
+	if out, err := m.runner(ctx, "nft", "add", "element", "inet", m.tableName, setName, elem); err != nil {
+		return fmt.Errorf("failed to add nft element %s to %s in table %s: %w (output: %s)", elem, setName, m.tableName, err, string(out))
 	}
 
 	m.openPorts[key] = 1

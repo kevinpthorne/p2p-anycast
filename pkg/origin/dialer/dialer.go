@@ -331,7 +331,9 @@ func (o *OriginNode) startEdgeDatagramReceiver(conn network.Conn) {
 			}
 
 			if o.natTable != nil {
-				_ = o.natTable.HandleForwardDatagram(edgePeer, data)
+				if err := o.natTable.HandleForwardDatagram(edgePeer, data); err != nil {
+					log.Printf("[Origin] Failed to handle UDP forward datagram from %s: %v", edgePeer, err)
+				}
 			}
 		}
 	}()

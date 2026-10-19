@@ -137,9 +137,8 @@ func (t *Table) HandleForwardDatagram(edgePeer peer.ID, data []byte) error {
 	now := time.Now()
 
 	if !exists {
-		// Bind ephemeral UDP socket on loopback
-		lAddr := &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 0}
-		conn, err := net.ListenUDP("udp", lAddr)
+		// Bind ephemeral UDP socket (wildcard so kernel routes to target subnet)
+		conn, err := net.ListenUDP("udp", &net.UDPAddr{Port: 0})
 		if err != nil {
 			t.mu.Unlock()
 			return fmt.Errorf("failed to allocate ephemeral UDP socket: %w", err)
