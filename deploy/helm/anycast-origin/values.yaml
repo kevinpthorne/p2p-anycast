@@ -1,9 +1,12 @@
 replicaCount: 1
 
 image:
-  repository: anycast-origin
+  repository: ghcr.io/kevinpthorne/anycast-origin
   pullPolicy: IfNotPresent
   tag: "latest"
+
+# Optional command override. Defaults to empty list so the container image's default Entrypoint is used.
+command: []
 
 imagePullSecrets: []
 nameOverride: ""

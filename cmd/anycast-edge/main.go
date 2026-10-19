@@ -120,6 +120,7 @@ func main() {
 		// Verify origin has an active authenticated session
 		pID, err := peer.Decode(reg.OriginPeerId)
 		if err != nil {
+			log.Printf("[Edge] Invalid origin peer ID in announcement: %s: %v", reg.OriginPeerId, err)
 			return
 		}
 

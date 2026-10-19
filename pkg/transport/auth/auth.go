@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"sync"
 
 	"github.com/cloudflare/circl/sign/mldsa/mldsa87"
@@ -86,9 +87,13 @@ func (a *Authenticator) handleInboundStream(s network.Stream) {
 
 	claims, err := a.serverHandshake(s, remotePeer)
 	if err != nil {
+		log.Printf("[Auth] Inbound authentication failed from peer %s: %v", remotePeer, err)
 		s.Reset()
 		return
 	}
+
+	log.Printf("[Auth] Peer %s authenticated successfully (Subject: %q, Role: %v)",
+		remotePeer, claims.SubjectId, claims.Role)
 
 	a.mu.Lock()
 	a.sessions[remotePeer] = claims

@@ -252,7 +252,7 @@ func main() {
 	defer originNode.Close()
 
 	originNode.Start()
-	log.Printf("[Origin] Outbound dialer started, connected to %d edges.", len(cfgJSON.EdgeMultiaddrs))
+	log.Printf("[Origin] Outbound dialer started; dialing %d configured edge(s) in background...", len(cfgJSON.EdgeMultiaddrs))
 
 	// Wait for OS signals
 	sigChan := make(chan os.Signal, 1)

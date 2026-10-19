@@ -3,6 +3,7 @@ package dialer
 import (
 	"context"
 	"fmt"
+	"log"
 	"sync"
 	"time"
 
@@ -161,6 +162,7 @@ func (o *OriginNode) UpdateServices(services []ServiceConfig) {
 func (o *OriginNode) maintainConnection(addr multiaddr.Multiaddr) {
 	addrInfo, err := peer.AddrInfoFromP2pAddr(addr)
 	if err != nil {
+		log.Printf("[Origin] Invalid edge multiaddr %s: %v", addr, err)
 		return
 	}
 
@@ -175,10 +177,15 @@ func (o *OriginNode) maintainConnection(addr multiaddr.Multiaddr) {
 		}
 
 		err := o.host.Connect(o.ctx, *addrInfo)
-		if err == nil {
+		if err != nil {
+			log.Printf("[Origin] Failed to connect to edge %s (%s): %v", addrInfo.ID, addr, err)
+		} else {
 			// Run mutual authentication over /p2p-anycast/auth/1.0.0
-			_, authErr := o.authenticator.AuthenticateOutbound(o.ctx, addrInfo.ID)
-			if authErr == nil {
+			claims, authErr := o.authenticator.AuthenticateOutbound(o.ctx, addrInfo.ID)
+			if authErr != nil {
+				log.Printf("[Origin] Mutual authentication failed with edge %s: %v", addrInfo.ID, authErr)
+			} else {
+				log.Printf("[Origin] Successfully connected and authenticated with edge %s (Subject: %q)", addrInfo.ID, claims.SubjectId)
 				o.mu.Lock()
 				o.activeEdges[addrInfo.ID] = true
 				o.mu.Unlock()
@@ -191,6 +198,7 @@ func (o *OriginNode) maintainConnection(addr multiaddr.Multiaddr) {
 				// Wait until connection closes
 				for {
 					if len(o.host.Network().ConnsToPeer(addrInfo.ID)) == 0 {
+						log.Printf("[Origin] Connection to edge %s lost, will reconnect...", addrInfo.ID)
 						break
 					}
 					select {
@@ -216,6 +224,7 @@ func (o *OriginNode) maintainConnection(addr multiaddr.Multiaddr) {
 
 func (o *OriginNode) announceServicesToEdge(edgePeer peer.ID) {
 	go func() {
+		log.Printf("[Origin] Announcing %d service(s) to edge %s...", len(o.services), edgePeer)
 		// Pubsub protocol negotiation happens asynchronously after Connect()
 		// Announce immediately and retry after a brief delay so pubsub mesh is formed
 		for attempt := 1; attempt <= 4; attempt++ {
@@ -245,7 +254,9 @@ func (o *OriginNode) announceServicesToEdge(edgePeer peer.ID) {
 					OriginHmacCapability: token[:],
 				}
 
-				_ = o.registry.Publish(o.ctx, reg)
+				if err := o.registry.Publish(o.ctx, reg); err != nil {
+					log.Printf("[Origin] Failed to publish announcement for %s to edge %s: %v", svc.ServiceID, edgePeer, err)
+				}
 			}
 		}
 	}()

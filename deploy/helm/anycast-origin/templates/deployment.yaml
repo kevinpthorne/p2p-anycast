@@ -37,8 +37,10 @@ spec:
             {{- toYaml .Values.securityContext | nindent 12 }}
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
+          {{- with .Values.command }}
           command:
-            - /bin/anycast-origin
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
           args:
             - -config=/etc/anycast/config/origin_config.json
             - -manifest=/etc/anycast/config/origin_manifest.pb

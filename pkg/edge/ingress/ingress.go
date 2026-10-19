@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"net"
 	"sync"
 	"time"
@@ -133,6 +134,9 @@ func (r *Router) SyncPortListener(port uint32) {
 				r.tcpListeners[port] = ln
 				go r.acceptTCP(port, ln)
 				openTCP = true
+				log.Printf("[Ingress] Listening for public TCP traffic on 0.0.0.0:%d", port)
+			} else {
+				log.Printf("[Ingress] Failed to bind TCP listener on port %d: %v", port, err)
 			}
 		}
 	} else {
@@ -140,6 +144,7 @@ func (r *Router) SyncPortListener(port uint32) {
 			ln.Close()
 			delete(r.tcpListeners, port)
 			closeTCP = true
+			log.Printf("[Ingress] Closed public TCP listener on port %d", port)
 		}
 	}
 
@@ -152,6 +157,9 @@ func (r *Router) SyncPortListener(port uint32) {
 				r.udpListeners[port] = uln
 				go r.acceptUDP(port, uln)
 				openUDP = true
+				log.Printf("[Ingress] Listening for public UDP traffic on 0.0.0.0:%d", port)
+			} else {
+				log.Printf("[Ingress] Failed to bind UDP listener on port %d: %v", port, err)
 			}
 		}
 	} else {
@@ -159,6 +167,7 @@ func (r *Router) SyncPortListener(port uint32) {
 			uln.Close()
 			delete(r.udpListeners, port)
 			closeUDP = true
+			log.Printf("[Ingress] Closed public UDP listener on port %d", port)
 		}
 	}
 

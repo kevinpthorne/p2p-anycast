@@ -37,8 +37,10 @@ spec:
             {{- toYaml .Values.securityContext | nindent 12 }}
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
+          {{- with .Values.command }}
           command:
-            - /bin/anycast-edge
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
           args:
             - -listen-p2p={{ .Values.config.listenP2p }}
             - -manifest=/etc/anycast/config/edge_manifest.pb

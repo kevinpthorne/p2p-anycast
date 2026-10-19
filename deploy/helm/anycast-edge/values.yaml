@@ -5,6 +5,9 @@ image:
   pullPolicy: IfNotPresent
   tag: "latest"
 
+# Optional command override. Defaults to empty list so the container image's default Entrypoint is used.
+command: []
+
 imagePullSecrets: []
 nameOverride: ""
 fullnameOverride: ""

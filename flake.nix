@@ -27,7 +27,7 @@
           packages = {
             anycast-edge = pkgs.buildGoModule {
               pname = "anycast-edge";
-              version = "0.6.0";
+              version = "0.7.0";
               src = ./.;
               subPackages = [ "cmd/anycast-edge" ];
               vendorHash = null;
@@ -42,7 +42,7 @@
 
             anycast-origin = pkgs.buildGoModule {
               pname = "anycast-origin";
-              version = "0.6.0";
+              version = "0.7.0";
               src = ./.;
               subPackages = [ "cmd/anycast-origin" ];
               vendorHash = null;
@@ -57,7 +57,7 @@
 
             anycast-ca = pkgs.buildGoModule {
               pname = "anycast-ca";
-              version = "0.6.0";
+              version = "0.7.0";
               src = ./.;
               subPackages = [ "cmd/anycast-ca" ];
               vendorHash = null;
@@ -73,10 +73,14 @@
             edge-image = pkgs.dockerTools.buildLayeredImage {
               name = "anycast-edge";
               tag = "latest";
-              contents = [ ];
+              contents = [
+                self.packages.${system}.anycast-edge
+                pkgs.dockerTools.caCertificates
+              ];
               fakeRootCommands = ''
-                mkdir -p data tmp
+                mkdir -p bin data tmp
                 chmod 1777 tmp
+                ln -sf ${self.packages.${system}.anycast-edge}/bin/anycast-edge bin/anycast-edge
               '';
               config = {
                 Entrypoint = [ "${self.packages.${system}.anycast-edge}/bin/anycast-edge" ];
@@ -93,10 +97,14 @@
             origin-image = pkgs.dockerTools.buildLayeredImage {
               name = "anycast-origin";
               tag = "latest";
-              contents = [ ];
+              contents = [
+                self.packages.${system}.anycast-origin
+                pkgs.dockerTools.caCertificates
+              ];
               fakeRootCommands = ''
-                mkdir -p data tmp
+                mkdir -p bin data tmp
                 chmod 1777 tmp
+                ln -sf ${self.packages.${system}.anycast-origin}/bin/anycast-origin bin/anycast-origin
               '';
               config = {
                 Entrypoint = [ "${self.packages.${system}.anycast-origin}/bin/anycast-origin" ];
