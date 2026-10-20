@@ -238,6 +238,60 @@ func TestNftablesManagerReconcile(t *testing.T) {
 	}
 }
 
+func TestNftablesManagerReconcileExistingEmptySets(t *testing.T) {
+	mock := &mockRunner{}
+	mgr, err := newNftablesManagerWithTable(mock.Run, "nixos-fw")
+	if err != nil {
+		t.Fatalf("unexpected error creating nftables manager: %v", err)
+	}
+	defer mgr.Close()
+
+	if err := mgr.OpenPort(ProtocolTCP, 25565); err != nil {
+		t.Fatalf("OpenPort failed: %v", err)
+	}
+	if err := mgr.OpenPort(ProtocolUDP, 19132); err != nil {
+		t.Fatalf("OpenPort failed: %v", err)
+	}
+
+	// Now simulate a NixOS reload where sets exist in /etc/nftables.conf but elements are empty
+	mock.mu.Lock()
+	mock.commands = nil
+	mock.mu.Unlock()
+
+	customRunner := func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		cmdStr := name + " " + strings.Join(args, " ")
+		if strings.Contains(cmdStr, "list set inet nixos-fw anycast_tcp") {
+			return []byte("table inet nixos-fw {\n\tset anycast_tcp {\n\t\ttype inet_service\n\t}\n}\n"), nil
+		}
+		if strings.Contains(cmdStr, "list set inet nixos-fw anycast_udp") {
+			return []byte("table inet nixos-fw {\n\tset anycast_udp {\n\t\ttype inet_service\n\t}\n}\n"), nil
+		}
+		return mock.Run(ctx, name, args...)
+	}
+
+	mgr.mu.Lock()
+	mgr.runner = customRunner
+	mgr.mu.Unlock()
+
+	// Trigger reconcile
+	if err := mgr.Reconcile(); err != nil {
+		t.Fatalf("Reconcile failed: %v", err)
+	}
+
+	// Verify that sets were NOT re-created (since they already existed)
+	if mock.hasCommand("nft add set inet nixos-fw anycast_tcp") {
+		t.Errorf("reconcile should not re-add set if it already exists")
+	}
+
+	// But elements MUST be restored
+	if !mock.hasCommand("nft add element inet nixos-fw anycast_tcp { 25565 }") {
+		t.Errorf("expected reconcile to restore port 25565 TCP")
+	}
+	if !mock.hasCommand("nft add element inet nixos-fw anycast_udp { 19132 }") {
+		t.Errorf("expected reconcile to restore port 19132 UDP")
+	}
+}
+
 func TestNoopManager(t *testing.T) {
 	mgr := NewNoopManager()
 	if err := mgr.OpenPort(ProtocolTCP, 80); err != nil {

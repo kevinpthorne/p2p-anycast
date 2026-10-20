@@ -16,6 +16,10 @@ func (n *NoopManager) ClosePort(proto Protocol, port uint16) error {
 	return nil
 }
 
+func (n *NoopManager) Reconcile() error {
+	return nil
+}
+
 func (n *NoopManager) Close() error {
 	return nil
 }

@@ -171,8 +171,16 @@ func main() {
 
 	// Wait for OS signals
 	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
-	<-sigChan
-
-	log.Printf("[Edge] Shutting down...")
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
+	for sig := range sigChan {
+		if sig == syscall.SIGHUP {
+			log.Printf("[Edge] Received SIGHUP, reconciling firewall rules...")
+			if err := fw.Reconcile(); err != nil {
+				log.Printf("[Firewall] Failed to reconcile rules on SIGHUP: %v", err)
+			}
+			continue
+		}
+		log.Printf("[Edge] Received signal %v, shutting down...", sig)
+		break
+	}
 }

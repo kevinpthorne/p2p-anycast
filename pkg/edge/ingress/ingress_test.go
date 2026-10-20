@@ -33,6 +33,10 @@ func (m *testFirewallMock) Close() error {
 	return nil
 }
 
+func (m *testFirewallMock) Reconcile() error {
+	return nil
+}
+
 func TestEdgeDynamicListenerBinding(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()

@@ -183,3 +183,38 @@ func (m *IptablesManager) Close() error {
 	log.Printf("[Firewall] Flushed and deleted iptables chain %s", iptablesChain)
 	return nil
 }
+
+// Reconcile ensures the ANYCAST-EDGE chain exists and re-applies any missing rules.
+func (m *IptablesManager) Reconcile() error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if m.closed {
+		return nil
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if err := m.initChain(ctx); err != nil {
+		return err
+	}
+
+	for key := range m.openPorts {
+		var proto Protocol
+		var port uint16
+		if _, err := fmt.Sscanf(key, "%s:%d", &proto, &port); err == nil {
+			portStr := fmt.Sprintf("%d", port)
+			protoStr := string(proto)
+			if _, err := m.runner(ctx, "iptables", "-w", "5", "-C", iptablesChain, "-p", protoStr, "--dport", portStr, "-j", "ACCEPT"); err != nil {
+				_, _ = m.runner(ctx, "iptables", "-w", "5", "-A", iptablesChain, "-p", protoStr, "--dport", portStr, "-j", "ACCEPT")
+			}
+			if m.hasIPv6 {
+				if _, err := m.runner(ctx, "ip6tables", "-w", "5", "-C", iptablesChain, "-p", protoStr, "--dport", portStr, "-j", "ACCEPT"); err != nil {
+					_, _ = m.runner(ctx, "ip6tables", "-w", "5", "-A", iptablesChain, "-p", protoStr, "--dport", portStr, "-j", "ACCEPT")
+				}
+			}
+		}
+	}
+	return nil
+}

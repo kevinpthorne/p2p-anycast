@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -221,8 +222,14 @@ func (m *NftablesManager) Close() error {
 	return nil
 }
 
+// Reconcile verifies and restores dynamic anycast sets and rules.
+func (m *NftablesManager) Reconcile() error {
+	m.reconcile()
+	return nil
+}
+
 func (m *NftablesManager) reconcileLoop() {
-	ticker := time.NewTicker(10 * time.Second)
+	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
 
 	for {
@@ -247,37 +254,44 @@ func (m *NftablesManager) reconcile() {
 	defer cancel()
 
 	// Check if anycast_tcp and anycast_udp sets exist
-	needReinit := false
-	if _, err := m.runner(ctx, "nft", "list", "set", "inet", m.tableName, "anycast_tcp"); err != nil {
-		needReinit = true
-	} else if _, err := m.runner(ctx, "nft", "list", "set", "inet", m.tableName, "anycast_udp"); err != nil {
-		needReinit = true
-	}
+	tcpOut, tcpErr := m.runner(ctx, "nft", "list", "set", "inet", m.tableName, "anycast_tcp")
+	udpOut, udpErr := m.runner(ctx, "nft", "list", "set", "inet", m.tableName, "anycast_udp")
 
-	if needReinit {
+	if tcpErr != nil || udpErr != nil {
 		log.Printf("[Firewall] Detected missing nftables sets in table %s (ruleset reflashed/reloaded). Re-synchronizing rules...", m.tableName)
 		if err := m.init(ctx); err != nil {
 			log.Printf("[Firewall] Error re-initializing nftables during reconcile: %v", err)
 			return
 		}
-		// Re-add all currently active open ports
-		for key, count := range m.openPorts {
-			if count <= 0 {
-				continue
-			}
-			parts := strings.Split(key, ":")
-			if len(parts) != 2 {
-				continue
-			}
-			proto := parts[0]
-			port := parts[1]
-			setName := "anycast_tcp"
-			if proto == "udp" {
-				setName = "anycast_udp"
-			}
+		tcpOut = nil
+		udpOut = nil
+	}
+
+	// Re-add all currently active open ports if missing from sets
+	for key, count := range m.openPorts {
+		if count <= 0 {
+			continue
+		}
+		parts := strings.Split(key, ":")
+		if len(parts) != 2 {
+			continue
+		}
+		proto := parts[0]
+		port := parts[1]
+
+		setName := "anycast_tcp"
+		out := tcpOut
+		if proto == "udp" {
+			setName = "anycast_udp"
+			out = udpOut
+		}
+
+		// Check if port is already present in set elements
+		re := regexp.MustCompile(`\b` + regexp.QuoteMeta(port) + `\b`)
+		if out == nil || !re.Match(out) {
 			elem := fmt.Sprintf("{ %s }", port)
-			if out, err := m.runner(ctx, "nft", "add", "element", "inet", m.tableName, setName, elem); err != nil {
-				log.Printf("[Firewall] Error restoring element %s in set %s: %v (output: %s)", elem, setName, err, string(out))
+			if addOut, err := m.runner(ctx, "nft", "add", "element", "inet", m.tableName, setName, elem); err != nil {
+				log.Printf("[Firewall] Error restoring element %s in set %s: %v (output: %s)", elem, setName, err, string(addOut))
 			} else {
 				log.Printf("[Firewall] Restored dynamic %s port %s via nftables", proto, port)
 			}

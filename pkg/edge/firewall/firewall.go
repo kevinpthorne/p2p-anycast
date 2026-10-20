@@ -26,6 +26,9 @@ type Manager interface {
 	// ClosePort closes a public ingress port for the specified protocol.
 	ClosePort(proto Protocol, port uint16) error
 
+	// Reconcile checks and re-synchronizes firewall rules and sets if needed.
+	Reconcile() error
+
 	// Close cleans up all firewall rules and chains created by this manager.
 	Close() error
 }

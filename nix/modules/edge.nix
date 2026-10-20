@@ -171,7 +171,20 @@ let
             ip46tables -F ANYCAST-EDGE 2>/dev/null || true
             ip46tables -X ANYCAST-EDGE 2>/dev/null || true
           '';
+          extraInputRules = lib.mkIf (cfg.dynamicFirewall.enable && config.networking.nftables.enable) ''
+            tcp dport @anycast_tcp accept
+            udp dport @anycast_udp accept
+          '';
         };
+
+        networking.nftables.tables."nixos-fw".content = lib.mkIf (cfg.dynamicFirewall.enable && config.networking.nftables.enable) (lib.mkAfter ''
+          set anycast_tcp {
+            type inet_service
+          }
+          set anycast_udp {
+            type inet_service
+          }
+        '');
 
         systemd.services.anycast-edge = {
           description = "MeshCast Anycast Edge Router Daemon";
@@ -185,13 +198,10 @@ let
           partOf = lib.optional config.networking.nftables.enable "nftables.service"
             ++ lib.optional (!config.networking.nftables.enable) "firewall.service";
 
-          restartTriggers =
-            lib.optional (config.networking.nftables.enable && config.networking.nftables.tables ? "nixos-fw")
-              config.networking.nftables.tables."nixos-fw".content
-            ++ lib.optional (config.networking.nftables.enable && config.networking.nftables.ruleset != "")
-              config.networking.nftables.ruleset
-            ++ lib.optional (config.networking.nftables.enable && config.networking.nftables.rulesetFile != null)
-              config.networking.nftables.rulesetFile;
+          unitConfig = {
+            ReloadPropagatedFrom = lib.optional config.networking.nftables.enable "nftables.service"
+              ++ lib.optional (!config.networking.nftables.enable) "firewall.service";
+          };
 
           path = [
             pkgs.iptables
@@ -216,6 +226,8 @@ let
               ]
               ++ map lib.escapeShellArg cfg.extraArgs
             );
+
+            ExecReload = "${pkgs.coreutils}/bin/kill -HUP $MAINPID";
 
             Restart = "always";
             RestartSec = "5s";
@@ -246,14 +258,6 @@ let
             ProtectHome = "read-only";
             PrivateTmp = true;
           };
-        };
-
-        systemd.services.nftables = lib.mkIf (cfg.dynamicFirewall.enable && config.networking.nftables.enable) {
-          serviceConfig.ExecReload = [
-            (pkgs.writeShellScript "nftables-reload-anycast-edge" ''
-              ${pkgs.systemd}/bin/systemctl try-restart anycast-edge.service || true
-            '')
-          ];
         };
       };
     };
