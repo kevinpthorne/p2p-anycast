@@ -154,6 +154,8 @@ func (r *Router) SyncPortListener(port uint32) {
 			addr := &net.UDPAddr{IP: net.IPv4zero, Port: int(port)}
 			uln, err := net.ListenUDP("udp", addr)
 			if err == nil {
+				_ = uln.SetReadBuffer(4 * 1024 * 1024)
+				_ = uln.SetWriteBuffer(4 * 1024 * 1024)
 				r.udpListeners[port] = uln
 				go r.acceptUDP(port, uln)
 				openUDP = true

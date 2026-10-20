@@ -25,16 +25,23 @@ type Route struct {
 	ServiceID   string
 }
 
+type cachedUDP struct {
+	addr      *net.UDPAddr
+	expiresAt time.Time
+}
+
 // Table is a thread-safe static route table for local/internal service dispatch.
 type Table struct {
-	mu     sync.RWMutex
-	routes map[[16]byte]Route
+	mu       sync.RWMutex
+	routes   map[[16]byte]Route
+	udpCache map[[16]byte]cachedUDP
 }
 
 // NewTable creates a new static route table.
 func NewTable() *Table {
 	return &Table{
-		routes: make(map[[16]byte]Route),
+		routes:   make(map[[16]byte]Route),
+		udpCache: make(map[[16]byte]cachedUDP),
 	}
 }
 
@@ -43,6 +50,7 @@ func (t *Table) AddRoute(route Route) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.routes[route.BindingID] = route
+	delete(t.udpCache, route.BindingID)
 }
 
 // GetRoute retrieves a route by its binding ID.
@@ -82,5 +90,26 @@ func (t *Table) ResolveUDPAddr(bindingID [16]byte) (*net.UDPAddr, error) {
 		return nil, fmt.Errorf("%w: unix domain sockets not supported for UDP", ErrInvalidTarget)
 	}
 
-	return net.ResolveUDPAddr("udp", target)
+	now := time.Now()
+	t.mu.RLock()
+	cached, hasCached := t.udpCache[bindingID]
+	t.mu.RUnlock()
+
+	if hasCached && now.Before(cached.expiresAt) {
+		return cached.addr, nil
+	}
+
+	addr, err := net.ResolveUDPAddr("udp", target)
+	if err != nil {
+		return nil, err
+	}
+
+	t.mu.Lock()
+	t.udpCache[bindingID] = cachedUDP{
+		addr:      addr,
+		expiresAt: now.Add(30 * time.Second),
+	}
+	t.mu.Unlock()
+
+	return addr, nil
 }

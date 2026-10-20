@@ -176,8 +176,23 @@ let
         systemd.services.anycast-edge = {
           description = "MeshCast Anycast Edge Router Daemon";
           wantedBy = [ "multi-user.target" ];
-          after = [ "network-online.target" ];
-          wants = [ "network-online.target" ];
+          after = [ "network-online.target" ]
+            ++ lib.optional config.networking.nftables.enable "nftables.service"
+            ++ lib.optional (!config.networking.nftables.enable) "firewall.service";
+          wants = [ "network-online.target" ]
+            ++ lib.optional config.networking.nftables.enable "nftables.service"
+            ++ lib.optional (!config.networking.nftables.enable) "firewall.service";
+          partOf = lib.optional config.networking.nftables.enable "nftables.service"
+            ++ lib.optional (!config.networking.nftables.enable) "firewall.service";
+
+          restartTriggers =
+            lib.optional (config.networking.nftables.enable && config.networking.nftables.tables ? "nixos-fw")
+              config.networking.nftables.tables."nixos-fw".content
+            ++ lib.optional (config.networking.nftables.enable && config.networking.nftables.ruleset != "")
+              config.networking.nftables.ruleset
+            ++ lib.optional (config.networking.nftables.enable && config.networking.nftables.rulesetFile != null)
+              config.networking.nftables.rulesetFile;
+
           path = [
             pkgs.iptables
             pkgs.nftables
@@ -231,6 +246,14 @@ let
             ProtectHome = "read-only";
             PrivateTmp = true;
           };
+        };
+
+        systemd.services.nftables = lib.mkIf (cfg.dynamicFirewall.enable && config.networking.nftables.enable) {
+          serviceConfig.ExecReload = [
+            (pkgs.writeShellScript "nftables-reload-anycast-edge" ''
+              ${pkgs.systemd}/bin/systemctl try-restart anycast-edge.service || true
+            '')
+          ];
         };
       };
     };

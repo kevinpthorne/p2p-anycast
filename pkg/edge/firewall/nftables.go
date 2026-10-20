@@ -17,6 +17,8 @@ type NftablesManager struct {
 	isStandalone bool // true if managing dedicated inet anycast-edge table
 	openPorts    map[string]int
 	closed       bool
+	ctx          context.Context
+	cancel       context.CancelFunc
 }
 
 func newNftablesManager(runner commandRunner) (*NftablesManager, error) {
@@ -27,9 +29,12 @@ func newNftablesManagerWithTable(runner commandRunner, preferredTable string) (*
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
+	mCtx, mCancel := context.WithCancel(context.Background())
 	mgr := &NftablesManager{
 		runner:    runner,
 		openPorts: make(map[string]int),
+		ctx:       mCtx,
+		cancel:    mCancel,
 	}
 
 	if preferredTable != "" {
@@ -48,8 +53,11 @@ func newNftablesManagerWithTable(runner commandRunner, preferredTable string) (*
 	}
 
 	if err := mgr.init(ctx); err != nil {
+		mgr.cancel()
 		return nil, fmt.Errorf("failed to initialize nftables table %s: %w", mgr.tableName, err)
 	}
+
+	go mgr.reconcileLoop()
 
 	log.Printf("[Firewall] Initialized nftables dynamic manager (table=%s, standalone=%v)", mgr.tableName, mgr.isStandalone)
 	return mgr, nil
@@ -133,6 +141,16 @@ func (m *NftablesManager) OpenPort(proto Protocol, port uint16) error {
 
 	elem := fmt.Sprintf("{ %d }", port)
 	if out, err := m.runner(ctx, "nft", "add", "element", "inet", m.tableName, setName, elem); err != nil {
+		// Attempt auto-recovery if the set or rules were wiped
+		if errInit := m.init(ctx); errInit == nil {
+			if out2, err2 := m.runner(ctx, "nft", "add", "element", "inet", m.tableName, setName, elem); err2 == nil {
+				m.openPorts[key] = 1
+				log.Printf("[Firewall] Opened public %s port %d via nftables (after re-init)", proto, port)
+				return nil
+			} else {
+				return fmt.Errorf("failed to add nft element %s to %s in table %s after re-init: %w (output: %s)", elem, setName, m.tableName, err2, string(out2))
+			}
+		}
 		return fmt.Errorf("failed to add nft element %s to %s in table %s: %w (output: %s)", elem, setName, m.tableName, err, string(out))
 	}
 
@@ -186,6 +204,7 @@ func (m *NftablesManager) Close() error {
 		return nil
 	}
 	m.closed = true
+	m.cancel()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -200,4 +219,68 @@ func (m *NftablesManager) Close() error {
 	m.openPorts = make(map[string]int)
 	log.Printf("[Firewall] Cleaned up nftables table %s", m.tableName)
 	return nil
+}
+
+func (m *NftablesManager) reconcileLoop() {
+	ticker := time.NewTicker(10 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-m.ctx.Done():
+			return
+		case <-ticker.C:
+			m.reconcile()
+		}
+	}
+}
+
+func (m *NftablesManager) reconcile() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if m.closed {
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// Check if anycast_tcp and anycast_udp sets exist
+	needReinit := false
+	if _, err := m.runner(ctx, "nft", "list", "set", "inet", m.tableName, "anycast_tcp"); err != nil {
+		needReinit = true
+	} else if _, err := m.runner(ctx, "nft", "list", "set", "inet", m.tableName, "anycast_udp"); err != nil {
+		needReinit = true
+	}
+
+	if needReinit {
+		log.Printf("[Firewall] Detected missing nftables sets in table %s (ruleset reflashed/reloaded). Re-synchronizing rules...", m.tableName)
+		if err := m.init(ctx); err != nil {
+			log.Printf("[Firewall] Error re-initializing nftables during reconcile: %v", err)
+			return
+		}
+		// Re-add all currently active open ports
+		for key, count := range m.openPorts {
+			if count <= 0 {
+				continue
+			}
+			parts := strings.Split(key, ":")
+			if len(parts) != 2 {
+				continue
+			}
+			proto := parts[0]
+			port := parts[1]
+			setName := "anycast_tcp"
+			if proto == "udp" {
+				setName = "anycast_udp"
+			}
+			elem := fmt.Sprintf("{ %s }", port)
+			if out, err := m.runner(ctx, "nft", "add", "element", "inet", m.tableName, setName, elem); err != nil {
+				log.Printf("[Firewall] Error restoring element %s in set %s: %v (output: %s)", elem, setName, err, string(out))
+			} else {
+				log.Printf("[Firewall] Restored dynamic %s port %s via nftables", proto, port)
+			}
+		}
+	}
 }

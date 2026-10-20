@@ -108,10 +108,18 @@ func DecodeReturnEnvelope(data []byte) (*ReturnEnvelope, error) {
 }
 
 type clientFlow struct {
-	flowID     uint32
-	clientAddr *net.UDPAddr
-	listener   *net.UDPConn
-	lastSeen   time.Time
+	flowID       uint32
+	clientAddr   *net.UDPAddr
+	listener     *net.UDPConn
+	lastSeenNano atomic.Int64
+}
+
+func (c *clientFlow) touch() {
+	c.lastSeenNano.Store(time.Now().UnixNano())
+}
+
+func (c *clientFlow) lastSeen() time.Time {
+	return time.Unix(0, c.lastSeenNano.Load())
 }
 
 // EdgeDatagramForwarder handles routing between public UDP listeners and QUIC datagrams.
@@ -149,22 +157,30 @@ func (f *EdgeDatagramForwarder) Close() {
 func (f *EdgeDatagramForwarder) GetOrCreateFlow(clientAddr *net.UDPAddr, listener *net.UDPConn) uint32 {
 	addrStr := clientAddr.String()
 
+	f.mu.RLock()
+	flow, ok := f.flowsByAddr[addrStr]
+	if ok {
+		flow.touch()
+		f.mu.RUnlock()
+		return flow.flowID
+	}
+	f.mu.RUnlock()
+
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
-	now := time.Now()
 	if flow, ok := f.flowsByAddr[addrStr]; ok {
-		flow.lastSeen = now
+		flow.touch()
 		return flow.flowID
 	}
 
 	flowID := atomic.AddUint32(&f.flowSeq, 1)
-	flow := &clientFlow{
+	flow = &clientFlow{
 		flowID:     flowID,
 		clientAddr: clientAddr,
 		listener:   listener,
-		lastSeen:   now,
 	}
+	flow.touch()
 
 	f.flowsByAddr[addrStr] = flow
 	f.flowsByID[flowID] = flow
@@ -204,7 +220,7 @@ func (f *EdgeDatagramForwarder) HandleReturnDatagram(data []byte) error {
 		return fmt.Errorf("unknown flow ID %d", ret.FlowID)
 	}
 
-	flow.lastSeen = time.Now()
+	flow.touch()
 	_, err = flow.listener.WriteToUDP(ret.Payload, flow.clientAddr)
 	return err
 }
@@ -250,7 +266,7 @@ func (f *EdgeDatagramForwarder) sweepIdleFlows(now time.Time) {
 	defer f.mu.Unlock()
 
 	for id, flow := range f.flowsByID {
-		if now.Sub(flow.lastSeen) > 60*time.Second {
+		if now.Sub(flow.lastSeen()) > 60*time.Second {
 			delete(f.flowsByID, id)
 			delete(f.flowsByAddr, flow.clientAddr.String())
 		}

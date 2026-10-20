@@ -2,9 +2,12 @@ package nat
 
 import (
 	"context"
+	"encoding/binary"
 	"fmt"
+	"log"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/libp2p/go-libp2p/core/host"
@@ -36,7 +39,15 @@ type SessionRecord struct {
 	ephemeralConn *net.UDPConn
 	targetAddr    *net.UDPAddr
 	publicPort    uint32
-	lastSeen      time.Time
+	lastSeenNano  atomic.Int64
+}
+
+func (s *SessionRecord) touch() {
+	s.lastSeenNano.Store(time.Now().UnixNano())
+}
+
+func (s *SessionRecord) lastSeen() time.Time {
+	return time.Unix(0, s.lastSeenNano.Load())
 }
 
 // Table manages stateful user-space UDP NAT bindings on the Origin.
@@ -107,23 +118,6 @@ func (t *Table) HandleForwardDatagram(edgePeer peer.ID, data []byte) error {
 		return err
 	}
 
-	// 1. Resolve Route
-	route, ok := t.routes.GetRoute(env.BindingID)
-	if !ok {
-		return fmt.Errorf("no route for binding ID")
-	}
-
-	// 2. Verify HMAC Token
-	if !binding.VerifyHMAC(t.originKey, edgePeer.String(), route.PublicPort, env.BindingID, env.HMACToken[:]) {
-		return fmt.Errorf("HMAC verification failed")
-	}
-
-	// 3. Resolve Target Backend Address
-	targetAddr, err := t.routes.ResolveUDPAddr(env.BindingID)
-	if err != nil {
-		return fmt.Errorf("failed to resolve UDP target: %w", err)
-	}
-
 	sessionKey := SessionKey{
 		EdgePeerID: edgePeer.String(),
 		FlowID:     env.FlowID,
@@ -131,11 +125,38 @@ func (t *Table) HandleForwardDatagram(edgePeer peer.ID, data []byte) error {
 		ClientPort: env.ClientPort,
 	}
 
-	// 4. Session Lookup or Allocation
-	t.mu.Lock()
+	// 1. Fast Path: Concurrent Read Lock Check (bypasses DNS resolution, HMAC calculation, and global write locks)
+	t.mu.RLock()
 	session, exists := t.sessions[sessionKey]
-	now := time.Now()
+	if exists {
+		session.touch()
+		t.mu.RUnlock()
+		_, err := session.ephemeralConn.WriteToUDP(env.Payload, session.targetAddr)
+		return err
+	}
+	t.mu.RUnlock()
 
+	// 2. Slow Path: New Session Handshake
+	// 2a. Resolve Route
+	route, ok := t.routes.GetRoute(env.BindingID)
+	if !ok {
+		return fmt.Errorf("no route for binding ID")
+	}
+
+	// 2b. Verify HMAC Token
+	if !binding.VerifyHMAC(t.originKey, edgePeer.String(), route.PublicPort, env.BindingID, env.HMACToken[:]) {
+		return fmt.Errorf("HMAC verification failed")
+	}
+
+	// 2c. Resolve Target Backend Address (uses cached DNS in routes table)
+	targetAddr, err := t.routes.ResolveUDPAddr(env.BindingID)
+	if err != nil {
+		return fmt.Errorf("failed to resolve UDP target: %w", err)
+	}
+
+	// 2d. Session Lookup or Allocation under Write Lock
+	t.mu.Lock()
+	session, exists = t.sessions[sessionKey]
 	if !exists {
 		// Bind ephemeral UDP socket (wildcard so kernel routes to target subnet)
 		conn, err := net.ListenUDP("udp", &net.UDPAddr{Port: 0})
@@ -144,30 +165,36 @@ func (t *Table) HandleForwardDatagram(edgePeer peer.ID, data []byte) error {
 			return fmt.Errorf("failed to allocate ephemeral UDP socket: %w", err)
 		}
 
+		_ = conn.SetReadBuffer(4 * 1024 * 1024)
+		_ = conn.SetWriteBuffer(4 * 1024 * 1024)
+
 		session = &SessionRecord{
 			key:           sessionKey,
 			ephemeralConn: conn,
 			targetAddr:    targetAddr,
 			publicPort:    route.PublicPort,
-			lastSeen:      now,
 		}
+		session.touch()
 		t.sessions[sessionKey] = session
 
 		// Spawn receiver goroutine for return packets
 		go t.receiveReturnTraffic(edgePeer, env.FlowID, conn)
 	} else {
-		session.lastSeen = now
+		session.touch()
 	}
 	t.mu.Unlock()
 
-	// 5. Forward packet from ephemeral socket to backend
-	_, err = session.ephemeralConn.WriteToUDP(env.Payload, targetAddr)
+	// 3. Forward packet from ephemeral socket to backend
+	_, err = session.ephemeralConn.WriteToUDP(env.Payload, session.targetAddr)
 	return err
 }
 
 // receiveReturnTraffic listens on the ephemeral socket for backend return packets and dispatches them via QUIC datagrams.
 func (t *Table) receiveReturnTraffic(edgePeer peer.ID, flowID uint32, conn *net.UDPConn) {
 	buf := make([]byte, 65535)
+	sendBuf := make([]byte, forwarder.ReturnHeaderSize+65535)
+	binary.BigEndian.PutUint32(sendBuf[0:4], flowID)
+
 	for {
 		select {
 		case <-t.ctx.Done():
@@ -180,12 +207,10 @@ func (t *Table) receiveReturnTraffic(edgePeer peer.ID, flowID uint32, conn *net.
 			return // Socket closed
 		}
 
-		ret := &forwarder.ReturnEnvelope{
-			FlowID:  flowID,
-			Payload: buf[:n],
+		copy(sendBuf[forwarder.ReturnHeaderSize:forwarder.ReturnHeaderSize+n], buf[:n])
+		if err := p2pquic.SendDatagram(t.host, edgePeer, sendBuf[:forwarder.ReturnHeaderSize+n]); err != nil {
+			log.Printf("[NAT] Warning: failed to send return datagram to edge %s for flow %d: %v", edgePeer, flowID, err)
 		}
-
-		_ = p2pquic.SendDatagram(t.host, edgePeer, ret.Encode())
 	}
 }
 
@@ -206,7 +231,7 @@ func (t *Table) sweepIdleSessions(now time.Time) {
 	var toEvict []*SessionRecord
 
 	for _, s := range t.sessions {
-		idleDuration := now.Sub(s.lastSeen)
+		idleDuration := now.Sub(s.lastSeen())
 		timeout := DefaultIdleTimeout
 
 		if s.publicPort == SIPPort {

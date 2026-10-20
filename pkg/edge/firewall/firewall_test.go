@@ -2,6 +2,7 @@ package firewall
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -186,6 +187,54 @@ func TestNftablesManagerNixOS(t *testing.T) {
 	}
 	if mock.hasCommand("nft delete table inet nixos-fw") {
 		t.Errorf("should not delete nixos-fw table")
+	}
+}
+
+func TestNftablesManagerReconcile(t *testing.T) {
+	mock := &mockRunner{}
+	mgr, err := newNftablesManagerWithTable(mock.Run, "nixos-fw")
+	if err != nil {
+		t.Fatalf("unexpected error creating nftables manager: %v", err)
+	}
+	defer mgr.Close()
+
+	if err := mgr.OpenPort(ProtocolTCP, 25565); err != nil {
+		t.Fatalf("OpenPort failed: %v", err)
+	}
+	if err := mgr.OpenPort(ProtocolUDP, 19132); err != nil {
+		t.Fatalf("OpenPort failed: %v", err)
+	}
+
+	// Now simulate a ruleset wipe where "nft list set inet nixos-fw anycast_tcp" fails
+	mock.mu.Lock()
+	mock.commands = nil
+	mock.mu.Unlock()
+
+	// Make mock return error for "list set"
+	customRunner := func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		cmdStr := name + " " + strings.Join(args, " ")
+		if strings.Contains(cmdStr, "list set inet nixos-fw anycast_tcp") {
+			return nil, fmt.Errorf("Error: No such file or directory")
+		}
+		return mock.Run(ctx, name, args...)
+	}
+
+	mgr.mu.Lock()
+	mgr.runner = customRunner
+	mgr.mu.Unlock()
+
+	// Trigger reconcile
+	mgr.reconcile()
+
+	// Verify that sets and elements were restored
+	if !mock.hasCommand("nft add set inet nixos-fw anycast_tcp") {
+		t.Errorf("expected reconcile to re-add set anycast_tcp")
+	}
+	if !mock.hasCommand("nft add element inet nixos-fw anycast_tcp { 25565 }") {
+		t.Errorf("expected reconcile to restore port 25565 TCP")
+	}
+	if !mock.hasCommand("nft add element inet nixos-fw anycast_udp { 19132 }") {
+		t.Errorf("expected reconcile to restore port 19132 UDP")
 	}
 }
 
