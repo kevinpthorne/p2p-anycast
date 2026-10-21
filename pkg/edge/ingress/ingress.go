@@ -20,6 +20,7 @@ import (
 	"p2p-anycast/pkg/edge/forwarder"
 	"p2p-anycast/pkg/edge/proxy"
 	"p2p-anycast/pkg/edge/sni"
+	p2pquic "p2p-anycast/pkg/transport/quic"
 )
 
 var (
@@ -352,7 +353,9 @@ func (r *Router) acceptUDP(port uint32, uln *net.UDPConn) {
 		copy(packetData, buf[:n])
 
 		if err := r.forwarder.ForwardPacket(originPeer, bindingID, hmacToken, clientAddr, uln, packetData); err != nil {
-			log.Printf("[Ingress] Failed to forward UDP packet on port %d to origin %s: %v", port, originPeer, err)
+			if !p2pquic.IsDatagramTooLarge(err) {
+				log.Printf("[Ingress] Failed to forward UDP packet on port %d to origin %s: %v", port, originPeer, err)
+			}
 		}
 	}
 }

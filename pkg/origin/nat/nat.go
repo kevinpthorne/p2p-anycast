@@ -143,8 +143,8 @@ func (t *Table) HandleForwardDatagram(edgePeer peer.ID, data []byte) error {
 		return fmt.Errorf("no route for binding ID")
 	}
 
-	// 2b. Verify HMAC Token
-	if !binding.VerifyHMAC(t.originKey, edgePeer.String(), route.PublicPort, env.BindingID, env.HMACToken[:]) {
+	// 2b. Verify HMAC Token (supports Origin-scoped mesh capability token + legacy Edge-scoped fallback)
+	if !binding.VerifyHMACWithFallback(t.originKey, t.host.ID().String(), edgePeer.String(), route.PublicPort, env.BindingID, env.HMACToken[:]) {
 		return fmt.Errorf("HMAC verification failed")
 	}
 

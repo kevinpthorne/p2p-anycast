@@ -3,6 +3,7 @@ package stream
 import (
 	"errors"
 	"io"
+	"log"
 	"net"
 	"sync"
 
@@ -20,9 +21,9 @@ var (
 
 // Handler processes inbound proxied TCP streams from Edge routers.
 type Handler struct {
-	host       host.Host
-	originKey  []byte
-	routes     *dispatch.Table
+	host      host.Host
+	originKey []byte
+	routes    *dispatch.Table
 }
 
 // NewHandler creates a new TCP stream handler on the Origin side.
@@ -54,12 +55,15 @@ func (h *Handler) handleStream(s network.Stream) {
 	// 2. Resolve route
 	route, ok := h.routes.GetRoute(bindingID)
 	if !ok {
+		log.Printf("[Origin] Failed to handle TCP stream from %s: no route for binding ID %x", remotePeer, bindingID)
 		s.Reset()
 		return
 	}
 
-	// 3. Verify HMAC token
-	if !binding.VerifyHMAC(h.originKey, remotePeer, route.PublicPort, bindingID, hmacToken) {
+	// 3. Verify HMAC token (supports Origin-scoped mesh capability token + legacy Edge-scoped fallback)
+	if !binding.VerifyHMACWithFallback(h.originKey, h.host.ID().String(), remotePeer, route.PublicPort, bindingID, hmacToken) {
+		log.Printf("[Origin] Failed to handle TCP stream from %s for service %s (port %d): HMAC verification failed",
+			remotePeer, route.ServiceID, route.PublicPort)
 		s.Reset()
 		return
 	}
@@ -67,6 +71,8 @@ func (h *Handler) handleStream(s network.Stream) {
 	// 4. Dial target service
 	backendConn, err := h.routes.DialTCP(bindingID)
 	if err != nil {
+		log.Printf("[Origin] Failed to dial backend TCP target %s for service %s: %v",
+			route.Target, route.ServiceID, err)
 		s.Reset()
 		return
 	}

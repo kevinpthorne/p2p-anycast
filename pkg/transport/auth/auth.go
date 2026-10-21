@@ -98,6 +98,19 @@ func (a *Authenticator) handleInboundStream(s network.Stream) {
 	a.mu.Lock()
 	a.sessions[remotePeer] = claims
 	a.mu.Unlock()
+
+	a.evictStaleConns(remotePeer, s.Conn())
+}
+
+func (a *Authenticator) evictStaleConns(peerID peer.ID, activeConn network.Conn) {
+	if a.host == nil || activeConn == nil {
+		return
+	}
+	for _, c := range a.host.Network().ConnsToPeer(peerID) {
+		if c != activeConn {
+			_ = c.Close()
+		}
+	}
 }
 
 // serverHandshake handles the Edge side of mutual manifest exchange.
@@ -177,6 +190,8 @@ func (a *Authenticator) AuthenticateOutbound(ctx context.Context, edgePeer peer.
 	a.mu.Lock()
 	a.sessions[edgePeer] = claimsB
 	a.mu.Unlock()
+
+	a.evictStaleConns(edgePeer, s.Conn())
 
 	return claimsB, nil
 }

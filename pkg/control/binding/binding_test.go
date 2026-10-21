@@ -68,4 +68,22 @@ func TestGenerateAndVerifyHMAC(t *testing.T) {
 	if VerifyHMAC([]byte("wrong-key"), edgePeerID, publicPort, bindingID, token[:]) {
 		t.Fatal("VerifyHMAC succeeded with wrong origin key")
 	}
+
+	// VerifyHMACWithFallback accepts origin-scoped token across multiple edges
+	originPeerID := "12D3KooWOriginNodePeerID"
+	originScopedToken := GenerateHMAC(originKey, originPeerID, publicPort, bindingID)
+	if !VerifyHMACWithFallback(originKey, originPeerID, "12D3KooWEdge1", publicPort, bindingID, originScopedToken[:]) {
+		t.Fatal("VerifyHMACWithFallback failed for Edge1 with origin-scoped token")
+	}
+	if !VerifyHMACWithFallback(originKey, originPeerID, "12D3KooWEdge2", publicPort, bindingID, originScopedToken[:]) {
+		t.Fatal("VerifyHMACWithFallback failed for Edge2 with origin-scoped token")
+	}
+	// Legacy edge-scoped token still accepted via fallback
+	if !VerifyHMACWithFallback(originKey, originPeerID, edgePeerID, publicPort, bindingID, token[:]) {
+		t.Fatal("VerifyHMACWithFallback failed for legacy edge-scoped token")
+	}
+	// Legacy edge-scoped token from wrong edge still rejected
+	if VerifyHMACWithFallback(originKey, originPeerID, "12D3KooWEdge2", publicPort, bindingID, token[:]) {
+		t.Fatal("VerifyHMACWithFallback succeeded for mismatched legacy edge token")
+	}
 }

@@ -316,3 +316,74 @@ func TestSingletonScopedBySNIOnSharedPort(t *testing.T) {
 	}
 }
 
+func TestIdempotentHeartbeatUpsert(t *testing.T) {
+	var registerCount int
+	var mu sync.Mutex
+	regDone := make(chan struct{}, 2)
+
+	mgr := NewManager(Config{
+		OnRegister: func(reg *control.ServiceRegistration) {
+			mu.Lock()
+			registerCount++
+			mu.Unlock()
+			regDone <- struct{}{}
+		},
+	})
+	defer mgr.Close()
+
+	var bID [16]byte
+	copy(bID[:], "hb-upsert-token1")
+
+	hbReg := &control.ServiceRegistration{
+		Type:                 control.MessageType_HEARTBEAT,
+		BindingId:            bID[:],
+		ServiceId:            "minecraft-bedrock",
+		OriginPeerId:         "origin-peer-hb",
+		PublicPort:           19132,
+		Protocol:             control.TransportProtocol_UDP,
+		Policy:               control.RoutingPolicy_STRICT_SINGLETON,
+		OriginHmacCapability: []byte("origin-scoped-hmac-32-bytes-long"),
+		LeaseDurationSec:     60,
+		LeaseEpoch:           100,
+	}
+
+	// 1. First heartbeat on a freshly booted Edge with no existing lease -> should self-register and fire OnRegister
+	if err := mgr.Register(hbReg); err != nil {
+		t.Fatalf("expected heartbeat upsert to succeed, got: %v", err)
+	}
+
+	select {
+	case <-regDone:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for OnRegister on initial heartbeat upsert")
+	}
+
+	// 2. Subsequent heartbeat for already-active lease -> should refresh TTL without firing OnRegister again
+	if err := mgr.Register(hbReg); err != nil {
+		t.Fatalf("expected second heartbeat upsert to succeed, got: %v", err)
+	}
+	time.Sleep(50 * time.Millisecond)
+
+	mu.Lock()
+	if registerCount != 1 {
+		t.Fatalf("expected OnRegister to fire once, got %d", registerCount)
+	}
+	mu.Unlock()
+
+	// 3. Evict peer (simulating temporary disconnect) and receive heartbeat again -> should re-register
+	mgr.EvictPeer("origin-peer-hb")
+	if len(mgr.GetRegistrationsForPort(19132)) != 0 {
+		t.Fatal("expected 0 registrations after eviction")
+	}
+
+	if err := mgr.Register(hbReg); err != nil {
+		t.Fatalf("expected heartbeat upsert after eviction to succeed, got: %v", err)
+	}
+
+	select {
+	case <-regDone:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for OnRegister after eviction")
+	}
+}
+

@@ -154,9 +154,16 @@ func main() {
 				log.Printf("[Edge] Failed to register service %s: %v", reg.ServiceId, err)
 			}
 		case control.MessageType_HEARTBEAT:
-			var bID [16]byte
-			copy(bID[:], reg.BindingId)
-			_ = leaseMgr.Heartbeat(reg.OriginPeerId, bID, reg.LeaseEpoch)
+			if reg.ServiceId != "" {
+				// Full-state heartbeat: idempotent upsert (self-heals if Edge restarted and missed ANNOUNCE)
+				if err := leaseMgr.Register(reg); err != nil {
+					log.Printf("[Edge] Failed to upsert service %s from heartbeat: %v", reg.ServiceId, err)
+				}
+			} else {
+				var bID [16]byte
+				copy(bID[:], reg.BindingId)
+				_ = leaseMgr.Heartbeat(reg.OriginPeerId, bID, reg.LeaseEpoch)
+			}
 		case control.MessageType_REVOKE:
 			var bID [16]byte
 			copy(bID[:], reg.BindingId)

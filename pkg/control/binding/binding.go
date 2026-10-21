@@ -36,11 +36,11 @@ func DeriveBindingID(serviceID string, protocol control.TransportProtocol, publi
 	return bindingID
 }
 
-// GenerateHMAC computes the connection-scoped 128-bit HMAC capability token.
-// HMAC = Truncate_128(HMAC-SHA256(K_origin, EdgePeerID || public_port || binding_id))
-func GenerateHMAC(originKey []byte, edgePeerID string, publicPort uint32, bindingID [16]byte) [16]byte {
+// GenerateHMAC computes the 128-bit HMAC capability token for a service binding.
+// HMAC = Truncate_128(HMAC-SHA256(K_origin, OriginPeerID || public_port || binding_id))
+func GenerateHMAC(originKey []byte, peerScopeID string, publicPort uint32, bindingID [16]byte) [16]byte {
 	mac := hmac.New(sha256.New, originKey)
-	mac.Write([]byte(edgePeerID))
+	mac.Write([]byte(peerScopeID))
 
 	var portBuf [4]byte
 	binary.BigEndian.PutUint32(portBuf[:], publicPort)
@@ -55,10 +55,22 @@ func GenerateHMAC(originKey []byte, edgePeerID string, publicPort uint32, bindin
 }
 
 // VerifyHMAC validates an incoming 16-byte HMAC token in constant time.
-func VerifyHMAC(originKey []byte, edgePeerID string, publicPort uint32, bindingID [16]byte, token []byte) bool {
+func VerifyHMAC(originKey []byte, peerScopeID string, publicPort uint32, bindingID [16]byte, token []byte) bool {
 	if len(token) != 16 {
 		return false
 	}
-	expected := GenerateHMAC(originKey, edgePeerID, publicPort, bindingID)
+	expected := GenerateHMAC(originKey, peerScopeID, publicPort, bindingID)
 	return subtle.ConstantTimeCompare(expected[:], token) == 1
+}
+
+// VerifyHMACWithFallback validates an incoming 16-byte HMAC token against the OriginPeerID
+// (canonical for mesh/DHT broadcast registrations) and falls back to EdgePeerID for backwards compatibility.
+func VerifyHMACWithFallback(originKey []byte, originPeerID string, edgePeerID string, publicPort uint32, bindingID [16]byte, token []byte) bool {
+	if VerifyHMAC(originKey, originPeerID, publicPort, bindingID, token) {
+		return true
+	}
+	if edgePeerID != "" && edgePeerID != originPeerID {
+		return VerifyHMAC(originKey, edgePeerID, publicPort, bindingID, token)
+	}
+	return false
 }

@@ -10,8 +10,10 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"syscall"
+	"time"
 
 	"p2p-anycast/pkg/control/gossip"
 	control "p2p-anycast/pkg/proto/control"
@@ -40,6 +42,24 @@ type ServiceConfigJSON struct {
 	SNIHostname         string `json:"sni_hostname"`
 	Target              string `json:"target"` // "127.0.0.1:5060", "cluster.svc:25565", or "unix:///path"
 	EnableProxyProtocol bool   `json:"enable_proxy_protocol"`
+}
+
+func discoverK8sServices(ctx context.Context, k8sClient *k8s.Client, namespace, annotationPrefix, defaultGatewayTarget string) ([]dialer.ServiceConfig, error) {
+	k8sServices, err := k8sClient.ListServices(ctx, namespace)
+	if err != nil {
+		return nil, err
+	}
+
+	k8sTLSRoutes, err := k8sClient.ListTLSRoutes(ctx, namespace)
+	if err != nil {
+		log.Printf("[Origin] Warning: failed to list TLSRoutes: %v", err)
+	}
+
+	discovered := k8s.BuildServicesFromK8s(k8sServices, k8sTLSRoutes, k8s.BuilderOptions{
+		AnnotationPrefix:     annotationPrefix,
+		DefaultGatewayTarget: defaultGatewayTarget,
+	})
+	return discovered, nil
 }
 
 func main() {
@@ -141,8 +161,8 @@ func main() {
 		originMasterKey = []byte(envKey)
 	}
 
-	// Parse services
-	var services []dialer.ServiceConfig
+	// Parse static services
+	var staticServices []dialer.ServiceConfig
 	for _, s := range cfgJSON.Services {
 		var protoType control.TransportProtocol
 		switch strings.ToUpper(s.Protocol) {
@@ -168,7 +188,7 @@ func main() {
 			policy = control.RoutingPolicy_CLUSTERED_RTT
 		}
 
-		services = append(services, dialer.ServiceConfig{
+		staticServices = append(staticServices, dialer.ServiceConfig{
 			ServiceID:           s.ServiceID,
 			Protocol:            protoType,
 			PublicPort:          s.PublicPort,
@@ -179,40 +199,36 @@ func main() {
 		})
 	}
 
-	if *k8sEnable || os.Getenv("ANYCAST_K8S") == "true" {
-		k8sClient, err := k8s.NewClient(k8s.ClientConfig{
+	services := append([]dialer.ServiceConfig(nil), staticServices...)
+
+	var k8sClient *k8s.Client
+	var lastDiscovered []dialer.ServiceConfig
+	k8sEnabled := *k8sEnable || os.Getenv("ANYCAST_K8S") == "true"
+	if k8sEnabled {
+		var err error
+		k8sClient, err = k8s.NewClient(k8s.ClientConfig{
 			APIServerURL:          *k8sAPIServer,
 			Token:                 *k8sToken,
 			CACertFile:            *k8sCACert,
-			Namespace:              *k8sNamespace,
+			Namespace:             *k8sNamespace,
 			InsecureSkipTLSVerify: *k8sInsecure,
 		})
 		if err != nil {
 			log.Fatalf("[Origin] Failed to initialize Kubernetes client: %v", err)
 		}
 
-		k8sServices, err := k8sClient.ListServices(ctx, *k8sNamespace)
+		discovered, err := discoverK8sServices(ctx, k8sClient, *k8sNamespace, *k8sAnnotationPrefix, *k8sDefaultGatewayTarget)
 		if err != nil {
-			log.Fatalf("[Origin] Failed to list Kubernetes services: %v", err)
+			log.Printf("[Origin] Warning: initial Kubernetes service discovery failed (will retry periodically): %v", err)
+		} else {
+			lastDiscovered = discovered
+			log.Printf("[Origin] Discovered %d service(s) from Kubernetes annotations", len(discovered))
+			for _, d := range discovered {
+				log.Printf("[Origin]   -> [%s] %s:%d (policy: %s, sni: %q, target: %s)",
+					d.ServiceID, d.Protocol, d.PublicPort, d.Policy, d.SNIHostname, d.Target)
+			}
+			services = append(services, discovered...)
 		}
-
-		k8sTLSRoutes, err := k8sClient.ListTLSRoutes(ctx, *k8sNamespace)
-		if err != nil {
-			log.Printf("[Origin] Warning: failed to list TLSRoutes: %v", err)
-		}
-
-		discovered := k8s.BuildServicesFromK8s(k8sServices, k8sTLSRoutes, k8s.BuilderOptions{
-			AnnotationPrefix:     *k8sAnnotationPrefix,
-			DefaultGatewayTarget: *k8sDefaultGatewayTarget,
-		})
-
-		log.Printf("[Origin] Discovered %d service(s) from Kubernetes annotations", len(discovered))
-		for _, d := range discovered {
-			log.Printf("[Origin]   -> [%s] %s:%d (policy: %s, sni: %q, target: %s)",
-				d.ServiceID, d.Protocol, d.PublicPort, d.Policy, d.SNIHostname, d.Target)
-		}
-
-		services = append(services, discovered...)
 	}
 
 	// 5. Start libp2p Host (outbound on ephemeral UDP port)
@@ -253,6 +269,36 @@ func main() {
 
 	originNode.Start()
 	log.Printf("[Origin] Outbound dialer started; dialing %d configured edge(s) in background...", len(cfgJSON.EdgeMultiaddrs))
+
+	if k8sEnabled && k8sClient != nil {
+		go func() {
+			ticker := time.NewTicker(15 * time.Second)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					discovered, err := discoverK8sServices(ctx, k8sClient, *k8sNamespace, *k8sAnnotationPrefix, *k8sDefaultGatewayTarget)
+					if err != nil {
+						log.Printf("[Origin] Warning: periodic Kubernetes service discovery failed: %v", err)
+						continue
+					}
+					if !reflect.DeepEqual(discovered, lastDiscovered) {
+						lastDiscovered = discovered
+						log.Printf("[Origin] Kubernetes services changed; reconciled %d service(s) from annotations", len(discovered))
+						for _, d := range discovered {
+							log.Printf("[Origin]   -> [%s] %s:%d (policy: %s, sni: %q, target: %s)",
+								d.ServiceID, d.Protocol, d.PublicPort, d.Policy, d.SNIHostname, d.Target)
+						}
+						combined := append([]dialer.ServiceConfig(nil), staticServices...)
+						combined = append(combined, discovered...)
+						originNode.UpdateServices(combined)
+					}
+				}
+			}
+		}()
+	}
 
 	// Wait for OS signals
 	sigChan := make(chan os.Signal, 1)

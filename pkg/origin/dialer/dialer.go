@@ -85,7 +85,7 @@ func NewOriginNode(ctx context.Context, cfg Config) (*OriginNode, error) {
 		edgeAddrs:     mAddrs,
 		services:      cfg.Services,
 		activeEdges:   make(map[peer.ID]bool),
-		leaseEpoch:    uint64(time.Now().Unix()),
+		leaseEpoch:    uint64(time.Now().UnixMilli()),
 		ctx:           oCtx,
 		cancel:        cancel,
 	}
@@ -108,9 +108,12 @@ func NewOriginNode(ctx context.Context, cfg Config) (*OriginNode, error) {
 			node.startEdgeDatagramReceiver(conn)
 		},
 		DisconnectedF: func(net network.Network, conn network.Conn) {
-			node.mu.Lock()
-			delete(node.activeEdges, conn.RemotePeer())
-			node.mu.Unlock()
+			pID := conn.RemotePeer()
+			if len(net.ConnsToPeer(pID)) == 0 {
+				node.mu.Lock()
+				delete(node.activeEdges, pID)
+				node.mu.Unlock()
+			}
 		},
 	})
 
@@ -136,6 +139,7 @@ func (o *OriginNode) Close() {
 func (o *OriginNode) UpdateServices(services []ServiceConfig) {
 	o.mu.Lock()
 	o.services = services
+	o.leaseEpoch++
 	active := make([]peer.ID, 0, len(o.activeEdges))
 	for pID := range o.activeEdges {
 		active = append(active, pID)
@@ -222,40 +226,67 @@ func (o *OriginNode) maintainConnection(addr multiaddr.Multiaddr) {
 	}
 }
 
+func (o *OriginNode) buildServiceRegistrations(msgType control.MessageType) []*control.ServiceRegistration {
+	o.mu.RLock()
+	svcs := make([]ServiceConfig, len(o.services))
+	copy(svcs, o.services)
+	o.mu.RUnlock()
+
+	originPeerID := o.host.ID().String()
+	regs := make([]*control.ServiceRegistration, 0, len(svcs))
+
+	for _, svc := range svcs {
+		bID := binding.DeriveBindingID(svc.ServiceID, svc.Protocol, svc.PublicPort, svc.SNIHostname)
+		// Scope capability token to OriginPeerID so GossipSub / DHT mesh broadcasts are valid across all Edges
+		token := binding.GenerateHMAC(o.originKey, originPeerID, svc.PublicPort, bID)
+
+		demuxMode := control.DemuxMode_DEMUX_PORT
+		if svc.SNIHostname != "" {
+			demuxMode = control.DemuxMode_DEMUX_TLS_SNI
+		}
+
+		regs = append(regs, &control.ServiceRegistration{
+			Type:                 msgType,
+			BindingId:            bID[:],
+			ServiceId:            svc.ServiceID,
+			OriginPeerId:         originPeerID,
+			Protocol:             svc.Protocol,
+			PublicPort:           svc.PublicPort,
+			Policy:               svc.Policy,
+			SniHostname:          svc.SNIHostname,
+			DemuxMode:            demuxMode,
+			LeaseDurationSec:     60,
+			LeaseEpoch:           o.leaseEpoch,
+			EnableProxyProtocol:  svc.EnableProxyProtocol,
+			OriginHmacCapability: token[:],
+		})
+	}
+
+	return regs
+}
+
 func (o *OriginNode) announceServicesToEdge(edgePeer peer.ID) {
 	go func() {
-		log.Printf("[Origin] Announcing %d service(s) to edge %s...", len(o.services), edgePeer)
-		// Pubsub protocol negotiation happens asynchronously after Connect()
-		// Announce immediately and retry after a brief delay so pubsub mesh is formed
-		for attempt := 1; attempt <= 4; attempt++ {
-			time.Sleep(time.Duration(attempt*100) * time.Millisecond)
-			for _, svc := range o.services {
-				bID := binding.DeriveBindingID(svc.ServiceID, svc.Protocol, svc.PublicPort, svc.SNIHostname)
-				token := binding.GenerateHMAC(o.originKey, edgePeer.String(), svc.PublicPort, bID)
+		regs := o.buildServiceRegistrations(control.MessageType_ANNOUNCE)
+		if len(regs) == 0 {
+			return
+		}
 
-				demuxMode := control.DemuxMode_DEMUX_PORT
-				if svc.SNIHostname != "" {
-					demuxMode = control.DemuxMode_DEMUX_TLS_SNI
-				}
+		log.Printf("[Origin] Announcing %d service(s) to edge %s...", len(regs), edgePeer)
 
-				reg := &control.ServiceRegistration{
-					Type:                 control.MessageType_ANNOUNCE,
-					BindingId:            bID[:],
-					ServiceId:            svc.ServiceID,
-					OriginPeerId:         o.host.ID().String(),
-					Protocol:             svc.Protocol,
-					PublicPort:           svc.PublicPort,
-					Policy:               svc.Policy,
-					SniHostname:          svc.SNIHostname,
-					DemuxMode:            demuxMode,
-					LeaseDurationSec:     60,
-					LeaseEpoch:           o.leaseEpoch,
-					EnableProxyProtocol:  svc.EnableProxyProtocol,
-					OriginHmacCapability: token[:],
-				}
+		// 1. Immediate deterministic point-to-point sync over /p2p-anycast/register/1.0.0
+		syncCtx, cancel := context.WithTimeout(o.ctx, 5*time.Second)
+		if err := o.registry.PublishDirect(syncCtx, edgePeer, regs...); err != nil {
+			log.Printf("[Origin] Direct registration push to edge %s failed (falling back to GossipSub): %v", edgePeer, err)
+		}
+		cancel()
 
+		// 2. Also publish to GossipSub mesh so multi-hop / DHT mesh peers receive announcements
+		for attempt := 1; attempt <= 2; attempt++ {
+			time.Sleep(time.Duration(attempt*150) * time.Millisecond)
+			for _, reg := range regs {
 				if err := o.registry.Publish(o.ctx, reg); err != nil {
-					log.Printf("[Origin] Failed to publish announcement for %s to edge %s: %v", svc.ServiceID, edgePeer, err)
+					log.Printf("[Origin] Failed to publish announcement for %s to mesh: %v", reg.ServiceId, err)
 				}
 			}
 		}
@@ -284,34 +315,25 @@ func (o *OriginNode) publishHeartbeats() {
 	}
 	o.mu.RUnlock()
 
+	if len(active) == 0 {
+		return
+	}
+
+	regs := o.buildServiceRegistrations(control.MessageType_HEARTBEAT)
+	if len(regs) == 0 {
+		return
+	}
+
+	// 1. Broadcast once per service over GossipSub mesh
+	for _, reg := range regs {
+		_ = o.registry.Publish(o.ctx, reg)
+	}
+
+	// 2. Also push directly to connected bootstrap edges for guaranteed delivery
 	for _, edgePeer := range active {
-		for _, svc := range o.services {
-			bID := binding.DeriveBindingID(svc.ServiceID, svc.Protocol, svc.PublicPort, svc.SNIHostname)
-			token := binding.GenerateHMAC(o.originKey, edgePeer.String(), svc.PublicPort, bID)
-
-			demuxMode := control.DemuxMode_DEMUX_PORT
-			if svc.SNIHostname != "" {
-				demuxMode = control.DemuxMode_DEMUX_TLS_SNI
-			}
-
-			reg := &control.ServiceRegistration{
-				Type:                 control.MessageType_HEARTBEAT,
-				BindingId:            bID[:],
-				ServiceId:            svc.ServiceID,
-				OriginPeerId:         o.host.ID().String(),
-				Protocol:             svc.Protocol,
-				PublicPort:           svc.PublicPort,
-				Policy:               svc.Policy,
-				SniHostname:          svc.SNIHostname,
-				DemuxMode:            demuxMode,
-				LeaseDurationSec:     60,
-				LeaseEpoch:           o.leaseEpoch,
-				EnableProxyProtocol:  svc.EnableProxyProtocol,
-				OriginHmacCapability: token[:],
-			}
-
-			_ = o.registry.Publish(o.ctx, reg)
-		}
+		hbCtx, cancel := context.WithTimeout(o.ctx, 3*time.Second)
+		_ = o.registry.PublishDirect(hbCtx, edgePeer, regs...)
+		cancel()
 	}
 }
 

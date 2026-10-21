@@ -2,7 +2,7 @@
 
 buildGoModule {
   pname = "anycast-edge";
-  version = "0.7.4";
+  version = "0.7.5";
   src = ../..;
   subPackages = [ "cmd/anycast-edge" ];
   vendorHash = null;

@@ -69,14 +69,29 @@ func SendDatagram(h host.Host, remotePeer peer.ID, payload []byte) error {
 		return fmt.Errorf("no active connection to peer %s", remotePeer)
 	}
 
-	for _, c := range conns {
-		qconn, err := ExtractQUICConn(c)
+	// Iterate in reverse order to prefer the most recently established connection
+	var lastErr error
+	for i := len(conns) - 1; i >= 0; i-- {
+		qconn, err := ExtractQUICConn(conns[i])
 		if err == nil && qconn != nil {
-			return qconn.SendDatagram(payload)
+			if sendErr := qconn.SendDatagram(payload); sendErr == nil {
+				return nil
+			} else {
+				lastErr = sendErr
+			}
 		}
 	}
 
+	if lastErr != nil {
+		return lastErr
+	}
 	return ErrNoQUICConn
+}
+
+// IsDatagramTooLarge reports whether err is a QUIC DatagramTooLargeError (e.g. from DPLPMTUD probes).
+func IsDatagramTooLarge(err error) bool {
+	var tooLarge *quic.DatagramTooLargeError
+	return errors.As(err, &tooLarge)
 }
 
 // ReceiveDatagram reads the next incoming datagram from the specified connection.

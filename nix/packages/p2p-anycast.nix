@@ -2,7 +2,7 @@
 
 buildGoModule {
   pname = "p2p-anycast";
-  version = "0.7.4";
+  version = "0.7.5";
   src = ../..;
   subPackages = [ "cmd/anycast-edge" "cmd/anycast-origin" "cmd/anycast-ca" ];
   vendorHash = null;
