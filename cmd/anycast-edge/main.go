@@ -130,21 +130,29 @@ func main() {
 			return
 		}
 
-		// Verify capability authorization
-		var authPolicy identity.AuthorizedPolicy
-		switch reg.Policy {
-		case control.RoutingPolicy_CLUSTERED_RTT:
-			authPolicy = identity.AuthorizedPolicy_POLICY_CLUSTERED_RTT
-		case control.RoutingPolicy_FAILOVER_STANDBY:
-			authPolicy = identity.AuthorizedPolicy_POLICY_FAILOVER_STANDBY
-		case control.RoutingPolicy_STRICT_SINGLETON:
-			authPolicy = identity.AuthorizedPolicy_POLICY_STRICT_SINGLETON
-		}
+		if reg.Type != control.MessageType_REVOKE {
+			if router.IsReservedPort(reg.PublicPort) {
+				log.Printf("[Edge] Rejecting service advertisement %q on reserved port %d from peer %s",
+					reg.ServiceId, reg.PublicPort, pID)
+				return
+			}
 
-		if err := manifest.CanAuthorizeService(claims, reg.ServiceId, reg.PublicPort, authPolicy); err != nil {
-			log.Printf("[Edge] Unauthorized service advertisement %q on port %d from peer %s: %v",
-				reg.ServiceId, reg.PublicPort, pID, err)
-			return
+			// Verify capability authorization (including SNI pattern when applicable)
+			var authPolicy identity.AuthorizedPolicy
+			switch reg.Policy {
+			case control.RoutingPolicy_CLUSTERED_RTT:
+				authPolicy = identity.AuthorizedPolicy_POLICY_CLUSTERED_RTT
+			case control.RoutingPolicy_FAILOVER_STANDBY:
+				authPolicy = identity.AuthorizedPolicy_POLICY_FAILOVER_STANDBY
+			case control.RoutingPolicy_STRICT_SINGLETON:
+				authPolicy = identity.AuthorizedPolicy_POLICY_STRICT_SINGLETON
+			}
+
+			if err := manifest.CanAuthorizeServiceWithSNI(claims, reg.ServiceId, reg.PublicPort, authPolicy, reg.SniHostname); err != nil {
+				log.Printf("[Edge] Unauthorized service advertisement %q on port %d (sni %q) from peer %s: %v",
+					reg.ServiceId, reg.PublicPort, reg.SniHostname, pID, err)
+				return
+			}
 		}
 
 		// Handle message type

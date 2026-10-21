@@ -5,10 +5,13 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"strings"
 
 	"github.com/cloudflare/circl/sign/mldsa/mldsa87"
+
+	"p2p-anycast/pkg/pki/keystore"
 )
 
 const (
@@ -17,6 +20,9 @@ const (
 
 	// ContextNodeAuth is the FIPS 204 context string for runtime challenge-response handshakes.
 	ContextNodeAuth = "p2p-anycast:node:auth:v1"
+
+	// EncryptedPrivateKeyPEMType is the PEM block type for AES-256-GCM encrypted ML-DSA-87 private keys.
+	EncryptedPrivateKeyPEMType = "ENCRYPTED ML-DSA-87 PRIVATE KEY"
 
 	// PublicKeySize is the size of an ML-DSA-87 public key in bytes (2592B).
 	PublicKeySize = mldsa87.PublicKeySize
@@ -107,7 +113,7 @@ func PrivateKeyFromBytes(data []byte) (*mldsa87.PrivateKey, error) {
 	return sk, nil
 }
 
-// EncodePrivateKeyToPEM encodes an ML-DSA-87 private key into PEM format.
+// EncodePrivateKeyToPEM encodes an ML-DSA-87 private key into unencrypted PEM format.
 func EncodePrivateKeyToPEM(sk *mldsa87.PrivateKey) []byte {
 	block := &pem.Block{
 		Type:  "ML-DSA-87 PRIVATE KEY",
@@ -116,13 +122,52 @@ func EncodePrivateKeyToPEM(sk *mldsa87.PrivateKey) []byte {
 	return pem.EncodeToMemory(block)
 }
 
+// EncodeEncryptedPrivateKeyToPEM encrypts an ML-DSA-87 private key with PBKDF2-HMAC-SHA256 + AES-256-GCM
+// and encodes it as a PEM block.
+func EncodeEncryptedPrivateKeyToPEM(sk *mldsa87.PrivateKey, passphrase string) ([]byte, error) {
+	if sk == nil {
+		return nil, errors.New("nil private key")
+	}
+	raw := PrivateKeyToBytes(sk)
+	defer func() {
+		for i := range raw {
+			raw[i] = 0
+		}
+	}()
+	return keystore.EncryptBytesWithPassphrase(raw, passphrase, EncryptedPrivateKeyPEMType)
+}
+
 // DecodePrivateKeyFromPEM decodes an ML-DSA-87 private key from PEM bytes.
+// If the PEM block is encrypted, it checks ANYCAST_CA_PASSPHRASE.
 func DecodePrivateKeyFromPEM(pemBytes []byte) (*mldsa87.PrivateKey, error) {
+	return DecodePrivateKeyFromPEMWithPassphrase(pemBytes, os.Getenv("ANYCAST_CA_PASSPHRASE"))
+}
+
+// DecodePrivateKeyFromPEMWithPassphrase decodes an ML-DSA-87 private key from either encrypted
+// or unencrypted PEM bytes.
+func DecodePrivateKeyFromPEMWithPassphrase(pemBytes []byte, passphrase string) (*mldsa87.PrivateKey, error) {
 	block, _ := pem.Decode(pemBytes)
-	if block == nil || block.Type != "ML-DSA-87 PRIVATE KEY" {
+	if block == nil {
 		return nil, ErrDecodingPEM
 	}
-	return PrivateKeyFromBytes(block.Bytes)
+	switch block.Type {
+	case EncryptedPrivateKeyPEMType:
+		decrypted, err := keystore.DecryptBytesWithPassphrase(pemBytes, passphrase, EncryptedPrivateKeyPEMType)
+		if err != nil {
+			return nil, err
+		}
+		defer func() {
+			for i := range decrypted {
+				decrypted[i] = 0
+			}
+		}()
+		return PrivateKeyFromBytes(decrypted)
+	case "ML-DSA-87 PRIVATE KEY":
+		log.Printf("[PKI] WARNING: Loaded unencrypted ML-DSA-87 Root CA private key; use encrypted CA keys in production")
+		return PrivateKeyFromBytes(block.Bytes)
+	default:
+		return nil, ErrDecodingPEM
+	}
 }
 
 // EncodePublicKeyToPEM encodes an ML-DSA-87 public key into PEM format.

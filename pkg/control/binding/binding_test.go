@@ -69,21 +69,35 @@ func TestGenerateAndVerifyHMAC(t *testing.T) {
 		t.Fatal("VerifyHMAC succeeded with wrong origin key")
 	}
 
-	// VerifyHMACWithFallback accepts origin-scoped token across multiple edges
-	originPeerID := "12D3KooWOriginNodePeerID"
-	originScopedToken := GenerateHMAC(originKey, originPeerID, publicPort, bindingID)
-	if !VerifyHMACWithFallback(originKey, originPeerID, "12D3KooWEdge1", publicPort, bindingID, originScopedToken[:]) {
-		t.Fatal("VerifyHMACWithFallback failed for Edge1 with origin-scoped token")
+	// Token generated for Edge 1 MUST NOT verify for Edge 2
+	edge1Token := GenerateHMAC(originKey, "12D3KooWEdge1", publicPort, bindingID)
+	edge2Token := GenerateHMAC(originKey, "12D3KooWEdge2", publicPort, bindingID)
+	if bytes.Equal(edge1Token[:], edge2Token[:]) {
+		t.Fatal("per-Edge HMAC tokens must be distinct across different Edge peers")
 	}
-	if !VerifyHMACWithFallback(originKey, originPeerID, "12D3KooWEdge2", publicPort, bindingID, originScopedToken[:]) {
-		t.Fatal("VerifyHMACWithFallback failed for Edge2 with origin-scoped token")
+	if !VerifyHMAC(originKey, "12D3KooWEdge1", publicPort, bindingID, edge1Token[:]) {
+		t.Fatal("VerifyHMAC failed for Edge1 with Edge1 token")
 	}
-	// Legacy edge-scoped token still accepted via fallback
-	if !VerifyHMACWithFallback(originKey, originPeerID, edgePeerID, publicPort, bindingID, token[:]) {
-		t.Fatal("VerifyHMACWithFallback failed for legacy edge-scoped token")
+	if VerifyHMAC(originKey, "12D3KooWEdge2", publicPort, bindingID, edge1Token[:]) {
+		t.Fatal("VerifyHMAC succeeded for Edge2 using Edge1 token (cross-Edge replay!)")
 	}
-	// Legacy edge-scoped token from wrong edge still rejected
-	if VerifyHMACWithFallback(originKey, originPeerID, "12D3KooWEdge2", publicPort, bindingID, token[:]) {
-		t.Fatal("VerifyHMACWithFallback succeeded for mismatched legacy edge token")
+}
+
+func TestValidateMasterKey(t *testing.T) {
+	// Short key must fail
+	if err := ValidateMasterKey([]byte("too-short")); err == nil {
+		t.Fatal("expected error for short master key")
+	}
+
+	// All-zero 32-byte key must fail
+	zeroKey := make([]byte, 32)
+	if err := ValidateMasterKey(zeroKey); err == nil {
+		t.Fatal("expected error for all-zero master key")
+	}
+
+	// Valid 32-byte key must pass
+	validKey := []byte("super-secret-origin-master-key32")
+	if err := ValidateMasterKey(validKey); err != nil {
+		t.Fatalf("expected valid master key to pass, got: %v", err)
 	}
 }

@@ -387,3 +387,60 @@ func TestIdempotentHeartbeatUpsert(t *testing.T) {
 	}
 }
 
+func TestLeasePolicyAndDemuxConflictRejection(t *testing.T) {
+	mgr := NewManager(Config{})
+	defer mgr.Close()
+
+	var bID1, bID2 [16]byte
+	copy(bID1[:], "binding-conflict1")
+	copy(bID2[:], "binding-conflict2")
+
+	// Register STRICT_SINGLETON on port 25565
+	reg1 := &control.ServiceRegistration{
+		BindingId:        bID1[:],
+		ServiceId:        "mc-primary",
+		OriginPeerId:     "origin-1",
+		PublicPort:       25565,
+		Protocol:         control.TransportProtocol_TCP,
+		Policy:           control.RoutingPolicy_STRICT_SINGLETON,
+		DemuxMode:        control.DemuxMode_DEMUX_PORT,
+		LeaseDurationSec: 60,
+		LeaseEpoch:       10,
+	}
+	if err := mgr.Register(reg1); err != nil {
+		t.Fatalf("failed to register reg1: %v", err)
+	}
+
+	// Attempting to register CLUSTERED_RTT on the same port 25565 must fail with ErrPolicyConflict
+	regConflictPolicy := &control.ServiceRegistration{
+		BindingId:        bID2[:],
+		ServiceId:        "mc-hijack",
+		OriginPeerId:     "origin-2",
+		PublicPort:       25565,
+		Protocol:         control.TransportProtocol_TCP,
+		Policy:           control.RoutingPolicy_CLUSTERED_RTT,
+		DemuxMode:        control.DemuxMode_DEMUX_PORT,
+		LeaseDurationSec: 60,
+	}
+	if err := mgr.Register(regConflictPolicy); err == nil {
+		t.Fatal("expected policy conflict error when registering CLUSTERED_RTT on STRICT_SINGLETON port")
+	}
+
+	// Attempting to register DEMUX_TLS_SNI on a raw DEMUX_PORT port must fail
+	regConflictDemux := &control.ServiceRegistration{
+		BindingId:        bID2[:],
+		ServiceId:        "mc-sni-hijack",
+		OriginPeerId:     "origin-2",
+		PublicPort:       25565,
+		Protocol:         control.TransportProtocol_TCP,
+		Policy:           control.RoutingPolicy_STRICT_SINGLETON,
+		DemuxMode:        control.DemuxMode_DEMUX_TLS_SNI,
+		SniHostname:      "mc.example.com",
+		LeaseDurationSec: 60,
+		LeaseEpoch:       20,
+	}
+	if err := mgr.Register(regConflictDemux); err == nil {
+		t.Fatal("expected demux mode conflict error when mixing DEMUX_TLS_SNI and DEMUX_PORT on same port")
+	}
+}
+

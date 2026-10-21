@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"os"
@@ -79,7 +80,12 @@ func NewClient(cfg ClientConfig) (*Client, error) {
 		}
 	}
 
+	if cfg.InsecureSkipTLSVerify {
+		log.Printf("[K8sClient] WARNING: InsecureSkipTLSVerify is enabled for Kubernetes API server %s; TLS certificate verification is disabled!", baseURL)
+	}
+
 	tlsConfig := &tls.Config{
+		MinVersion:         tls.VersionTLS12,
 		InsecureSkipVerify: cfg.InsecureSkipTLSVerify,
 	}
 

@@ -15,6 +15,7 @@ import (
 	"syscall"
 	"time"
 
+	"p2p-anycast/pkg/control/binding"
 	"p2p-anycast/pkg/control/gossip"
 	control "p2p-anycast/pkg/proto/control"
 	"p2p-anycast/pkg/origin/dialer"
@@ -160,6 +161,9 @@ func main() {
 	} else {
 		originMasterKey = []byte(envKey)
 	}
+	if err := binding.ValidateMasterKey(originMasterKey); err != nil {
+		log.Fatalf("[Origin] Invalid Origin master key: %v", err)
+	}
 
 	// Parse static services
 	var staticServices []dialer.ServiceConfig
@@ -241,8 +245,10 @@ func main() {
 	// 6. Setup Auth, Routes, Stream Handler, NAT Table, GossipSub
 	authenticator := auth.NewAuthenticator(h, idKey, signedManifest, caPub)
 	routes := dispatch.NewTable()
-	_ = stream.NewHandler(h, originMasterKey, routes)
+	streamHandler := stream.NewHandler(h, originMasterKey, routes)
+	streamHandler.SetAuthenticator(authenticator)
 	natTable := nat.NewTable(ctx, h, originMasterKey, routes)
+	natTable.SetAuthenticator(authenticator)
 	defer natTable.Close()
 
 	registry, err := gossip.NewMeshRegistry(ctx, h, nil)

@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -15,31 +17,44 @@ import (
 	"github.com/libp2p/go-libp2p/p2p/protocol/ping"
 
 	"p2p-anycast/pkg/control/lease"
-	control "p2p-anycast/pkg/proto/control"
 	"p2p-anycast/pkg/edge/firewall"
 	"p2p-anycast/pkg/edge/forwarder"
 	"p2p-anycast/pkg/edge/proxy"
 	"p2p-anycast/pkg/edge/sni"
+	control "p2p-anycast/pkg/proto/control"
 	p2pquic "p2p-anycast/pkg/transport/quic"
+)
+
+const (
+	// PingCacheTTL is the maximum age of a cached peer RTT before an asynchronous refresh is triggered.
+	PingCacheTTL = 30 * time.Second
 )
 
 var (
 	ErrNoOriginAvailable = errors.New("no active origin available for service")
 	ErrPortConflict      = errors.New("port already bound with conflicting policy")
+	ErrReservedPort      = errors.New("public port is reserved for administrative or mesh transport use")
 )
+
+type pingEntry struct {
+	rtt        time.Duration
+	measuredAt time.Time
+	refreshing bool
+}
 
 // Router orchestrates dynamic public listeners, policy routing, and proxying on the Edge.
 type Router struct {
-	mu           sync.RWMutex
-	host         host.Host
-	leaseMgr     *lease.Manager
-	forwarder    *forwarder.EdgeDatagramForwarder
-	firewall     firewall.Manager
-	tcpListeners map[uint32]net.Listener
-	udpListeners map[uint32]*net.UDPConn
-	pingCache    map[peer.ID]time.Duration
-	ctx          context.Context
-	cancel       context.CancelFunc
+	mu            sync.RWMutex
+	host          host.Host
+	leaseMgr      *lease.Manager
+	forwarder     *forwarder.EdgeDatagramForwarder
+	firewall      firewall.Manager
+	reservedPorts map[uint32]bool
+	tcpListeners  map[uint32]net.Listener
+	udpListeners  map[uint32]*net.UDPConn
+	pingCache     map[peer.ID]pingEntry
+	ctx           context.Context
+	cancel        context.CancelFunc
 }
 
 // NewRouter initializes the Edge ingress router with an optional firewall manager.
@@ -48,17 +63,35 @@ func NewRouter(ctx context.Context, h host.Host, leaseMgr *lease.Manager, fw fir
 		fw = firewall.NewNoopManager()
 	}
 
+	reserved := map[uint32]bool{
+		0:  true,
+		22: true, // SSH management port protection
+	}
+	if h != nil {
+		for _, ma := range h.Addrs() {
+			parts := strings.Split(ma.String(), "/")
+			for i := 0; i+1 < len(parts); i++ {
+				if parts[i] == "udp" || parts[i] == "tcp" {
+					if p, err := strconv.ParseUint(parts[i+1], 10, 32); err == nil && p > 0 {
+						reserved[uint32(p)] = true
+					}
+				}
+			}
+		}
+	}
+
 	rCtx, cancel := context.WithCancel(ctx)
 	r := &Router{
-		host:         h,
-		leaseMgr:     leaseMgr,
-		forwarder:    forwarder.NewEdgeDatagramForwarder(rCtx, h),
-		firewall:     fw,
-		tcpListeners: make(map[uint32]net.Listener),
-		udpListeners: make(map[uint32]*net.UDPConn),
-		pingCache:    make(map[peer.ID]time.Duration),
-		ctx:          rCtx,
-		cancel:       cancel,
+		host:          h,
+		leaseMgr:      leaseMgr,
+		forwarder:     forwarder.NewEdgeDatagramForwarder(rCtx, h),
+		firewall:      fw,
+		reservedPorts: reserved,
+		tcpListeners:  make(map[uint32]net.Listener),
+		udpListeners:  make(map[uint32]*net.UDPConn),
+		pingCache:     make(map[peer.ID]pingEntry),
+		ctx:           rCtx,
+		cancel:        cancel,
 	}
 
 	// Register network notifier to evict peer immediately on disconnect
@@ -75,6 +108,23 @@ func NewRouter(ctx context.Context, h host.Host, leaseMgr *lease.Manager, fw fir
 	})
 
 	return r
+}
+
+// IsReservedPort reports whether a public port is reserved on this Edge router.
+func (r *Router) IsReservedPort(port uint32) bool {
+	if port == 0 || port > 65535 {
+		return true
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.reservedPorts[port]
+}
+
+// AddReservedPort marks a port as reserved so Origins cannot dynamically bind it.
+func (r *Router) AddReservedPort(port uint32) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.reservedPorts[port] = true
 }
 
 // Close stops all listeners, forwarders, and cleans up firewall rules.
@@ -98,6 +148,10 @@ func (r *Router) Close() {
 
 // HandlePeerDisconnected cleans up all registrations for a disconnected peer and stops listeners if empty.
 func (r *Router) HandlePeerDisconnected(pID peer.ID) {
+	r.mu.Lock()
+	delete(r.pingCache, pID)
+	r.mu.Unlock()
+
 	evicted := r.leaseMgr.EvictPeer(pID.String())
 	for _, reg := range evicted {
 		r.SyncPortListener(reg.PublicPort)
@@ -107,6 +161,11 @@ func (r *Router) HandlePeerDisconnected(pID peer.ID) {
 // SyncPortListener ensures the appropriate OS socket listeners are open or closed based on active leases,
 // and synchronizes the OS firewall rules automatically.
 func (r *Router) SyncPortListener(port uint32) {
+	if r.IsReservedPort(port) {
+		log.Printf("[Ingress] Refusing to synchronize reserved port %d", port)
+		return
+	}
+
 	r.mu.Lock()
 
 	regs := r.leaseMgr.GetRegistrationsForPort(port)
@@ -301,7 +360,8 @@ func (r *Router) handleTCPConn(port uint32, clientConn net.Conn) {
 	var hmacToken [16]byte
 	copy(hmacToken[:], selectedReg.OriginHmacCapability)
 
-	_ = proxy.PipeTCPStream(clientConn, s, bindingID, hmacToken, selectedReg.EnableProxyProtocol, peekedBytes)
+	edgePriv := r.host.Peerstore().PrivKey(r.host.ID())
+	_ = proxy.PipeTCPStreamWithSigner(clientConn, s, bindingID, hmacToken, selectedReg.EnableProxyProtocol, peekedBytes, edgePriv)
 }
 
 func resetTCP(conn net.Conn) {
@@ -360,7 +420,32 @@ func (r *Router) acceptUDP(port uint32, uln *net.UDPConn) {
 	}
 }
 
-// selectLowestRTT picks the origin with the lowest RTT using libp2p Ping.
+func (r *Router) refreshPeerRTT(pID peer.ID) {
+	ctx, cancel := context.WithTimeout(r.ctx, 500*time.Millisecond)
+	defer cancel()
+	resChan := ping.Ping(ctx, r.host, pID)
+	var measured time.Duration
+	select {
+	case res := <-resChan:
+		if res.Error == nil {
+			measured = res.RTT
+		} else {
+			measured = 10 * time.Second
+		}
+	case <-ctx.Done():
+		measured = 10 * time.Second
+	}
+
+	r.mu.Lock()
+	r.pingCache[pID] = pingEntry{
+		rtt:        measured,
+		measuredAt: time.Now(),
+		refreshing: false,
+	}
+	r.mu.Unlock()
+}
+
+// selectLowestRTT picks the origin with the lowest RTT using libp2p Ping with a 30s TTL cache.
 func (r *Router) selectLowestRTT(candidates []*control.ServiceRegistration) *control.ServiceRegistration {
 	if len(candidates) == 1 {
 		return candidates[0]
@@ -368,6 +453,7 @@ func (r *Router) selectLowestRTT(candidates []*control.ServiceRegistration) *con
 
 	var bestReg *control.ServiceRegistration
 	bestRTT := time.Duration(1<<63 - 1)
+	now := time.Now()
 
 	for _, reg := range candidates {
 		pID, err := peer.Decode(reg.OriginPeerId)
@@ -376,27 +462,26 @@ func (r *Router) selectLowestRTT(candidates []*control.ServiceRegistration) *con
 		}
 
 		r.mu.RLock()
-		cachedRTT, exists := r.pingCache[pID]
+		entry, exists := r.pingCache[pID]
 		r.mu.RUnlock()
 
+		var cachedRTT time.Duration
 		if !exists {
-			// Measure RTT with timeout
-			ctx, cancel := context.WithTimeout(r.ctx, 500*time.Millisecond)
-			resChan := ping.Ping(ctx, r.host, pID)
-			select {
-			case res := <-resChan:
-				cancel()
-				if res.Error == nil {
-					cachedRTT = res.RTT
-					r.mu.Lock()
-					r.pingCache[pID] = cachedRTT
-					r.mu.Unlock()
-				} else {
-					cachedRTT = 10 * time.Second
+			r.refreshPeerRTT(pID)
+			r.mu.RLock()
+			entry = r.pingCache[pID]
+			r.mu.RUnlock()
+			cachedRTT = entry.rtt
+		} else {
+			cachedRTT = entry.rtt
+			if now.Sub(entry.measuredAt) > PingCacheTTL && !entry.refreshing {
+				r.mu.Lock()
+				if cur, ok := r.pingCache[pID]; ok && !cur.refreshing {
+					cur.refreshing = true
+					r.pingCache[pID] = cur
+					go r.refreshPeerRTT(pID)
 				}
-			case <-ctx.Done():
-				cancel()
-				cachedRTT = 10 * time.Second
+				r.mu.Unlock()
 			}
 		}
 
@@ -411,3 +496,4 @@ func (r *Router) selectLowestRTT(candidates []*control.ServiceRegistration) *con
 	}
 	return bestReg
 }
+

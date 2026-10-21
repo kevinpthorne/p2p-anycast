@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/libp2p/go-libp2p/core/peer"
+	"google.golang.org/protobuf/proto"
 
 	"p2p-anycast/pkg/pki/keystore"
 	control "p2p-anycast/pkg/proto/control"
@@ -82,5 +83,56 @@ func TestMeshRegistryGossip(t *testing.T) {
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("timed out waiting for gossip message")
+	}
+}
+
+func TestRegistrationSignatureAndTargetEdgeFiltering(t *testing.T) {
+	originKey, err := keystore.GenerateTestIdentity()
+	if err != nil {
+		t.Fatalf("failed to generate origin identity: %v", err)
+	}
+	otherKey, err := keystore.GenerateTestIdentity()
+	if err != nil {
+		t.Fatalf("failed to generate other identity: %v", err)
+	}
+
+	reg := &control.ServiceRegistration{
+		Type:                 control.MessageType_ANNOUNCE,
+		BindingId:            []byte("0123456789abcdef"),
+		ServiceId:            "pbx-core",
+		OriginPeerId:         originKey.PeerID().String(),
+		TargetEdgePeerId:     "12D3KooWTargetEdge1",
+		PublicPort:           5060,
+		Protocol:             control.TransportProtocol_UDP,
+		Policy:               control.RoutingPolicy_STRICT_SINGLETON,
+		OriginHmacCapability: []byte("hmac-token-16byt"),
+		LeaseDurationSec:     60,
+		LeaseEpoch:           1,
+	}
+
+	if err := SignRegistration(reg, originKey.Libp2pPrivKey()); err != nil {
+		t.Fatalf("SignRegistration failed: %v", err)
+	}
+	if len(reg.OriginSignature) == 0 || reg.Timestamp == 0 {
+		t.Fatal("expected OriginSignature and Timestamp to be populated")
+	}
+
+	// Valid signature verification must succeed
+	if err := VerifyRegistration(reg); err != nil {
+		t.Fatalf("VerifyRegistration failed on valid registration: %v", err)
+	}
+
+	// Forging OriginPeerId while signed by another key must fail
+	forged := proto.Clone(reg).(*control.ServiceRegistration)
+	forged.OriginPeerId = otherKey.PeerID().String()
+	if err := VerifyRegistration(forged); err == nil {
+		t.Fatal("expected VerifyRegistration to fail when OriginPeerId does not match signing key")
+	}
+
+	// Tampering with TargetEdgePeerId or OriginHmacCapability must invalidate signature
+	tamperedEdge := proto.Clone(reg).(*control.ServiceRegistration)
+	tamperedEdge.TargetEdgePeerId = "12D3KooWTargetEdge2"
+	if err := VerifyRegistration(tamperedEdge); err == nil {
+		t.Fatal("expected VerifyRegistration to fail when TargetEdgePeerId is modified")
 	}
 }

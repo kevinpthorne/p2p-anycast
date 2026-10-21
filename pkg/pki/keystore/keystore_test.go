@@ -341,3 +341,63 @@ func TestKeystoreHardwareOnlyGenerateWhenHardwareFails(t *testing.T) {
 		t.Fatal("file should NOT be generated when hardware tier is forced")
 	}
 }
+
+func TestKeystoreEncryptedAtRest(t *testing.T) {
+	tempDir := t.TempDir()
+	keyPath := filepath.Join(tempDir, "encrypted_identity.key")
+	passphrase := "correct-horse-battery-staple-2026"
+
+	// 1. Create encrypted key on disk
+	idKey1, err := LoadOrGenerateIdentity(Options{
+		KeyFilePath: keyPath,
+		AllowCreate: true,
+		ForceTier:   TierFilesystem,
+		Passphrase:  passphrase,
+	})
+	if err != nil {
+		t.Fatalf("failed to generate encrypted filesystem key: %v", err)
+	}
+
+	rawOnDisk, err := os.ReadFile(keyPath)
+	if err != nil {
+		t.Fatalf("failed to read encrypted key file: %v", err)
+	}
+	if !strings.Contains(string(rawOnDisk), EncryptedKeyPEMType) {
+		t.Fatalf("expected encrypted PEM header %q on disk, got:\n%s", EncryptedKeyPEMType, string(rawOnDisk))
+	}
+
+	// 2. Reload with correct passphrase must succeed and preserve Peer ID
+	idKey2, err := LoadOrGenerateIdentity(Options{
+		KeyFilePath: keyPath,
+		AllowCreate: false,
+		ForceTier:   TierFilesystem,
+		Passphrase:  passphrase,
+	})
+	if err != nil {
+		t.Fatalf("failed to reload encrypted key with correct passphrase: %v", err)
+	}
+	if idKey1.PeerID() != idKey2.PeerID() {
+		t.Fatalf("Peer ID mismatch after decrypting key: %s != %s", idKey1.PeerID(), idKey2.PeerID())
+	}
+
+	// 3. Reload with wrong passphrase must fail
+	_, err = LoadOrGenerateIdentity(Options{
+		KeyFilePath: keyPath,
+		AllowCreate: false,
+		ForceTier:   TierFilesystem,
+		Passphrase:  "wrong-passphrase",
+	})
+	if err == nil {
+		t.Fatal("expected error when loading encrypted key with wrong passphrase")
+	}
+
+	// 4. Reload without passphrase must fail
+	_, err = LoadOrGenerateIdentity(Options{
+		KeyFilePath: keyPath,
+		AllowCreate: false,
+		ForceTier:   TierFilesystem,
+	})
+	if err == nil {
+		t.Fatal("expected error when loading encrypted key without passphrase")
+	}
+}

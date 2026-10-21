@@ -148,3 +148,35 @@ func TestLoadPublicKey(t *testing.T) {
 	}
 }
 
+func TestMLDSA87EncryptedPEMEncodeDecode(t *testing.T) {
+	_, sk, err := GenerateKey()
+	if err != nil {
+		t.Fatalf("failed to generate key: %v", err)
+	}
+
+	passphrase := "root-ca-master-passphrase-secret"
+	encPEM, err := EncodeEncryptedPrivateKeyToPEM(sk, passphrase)
+	if err != nil {
+		t.Fatalf("EncodeEncryptedPrivateKeyToPEM failed: %v", err)
+	}
+
+	// Unencrypted decoder without passphrase must fail on encrypted PEM
+	if _, err := DecodePrivateKeyFromPEM(encPEM); err == nil {
+		t.Fatal("expected DecodePrivateKeyFromPEM without passphrase to fail on encrypted PEM")
+	}
+
+	// Wrong passphrase must fail
+	if _, err := DecodePrivateKeyFromPEMWithPassphrase(encPEM, "wrong-pass"); err == nil {
+		t.Fatal("expected DecodePrivateKeyFromPEMWithPassphrase with wrong passphrase to fail")
+	}
+
+	// Correct passphrase must round-trip identically
+	decodedSK, err := DecodePrivateKeyFromPEMWithPassphrase(encPEM, passphrase)
+	if err != nil {
+		t.Fatalf("DecodePrivateKeyFromPEMWithPassphrase failed: %v", err)
+	}
+	if !bytes.Equal(PrivateKeyToBytes(decodedSK), PrivateKeyToBytes(sk)) {
+		t.Fatal("decrypted ML-DSA-87 private key does not match original")
+	}
+}
+

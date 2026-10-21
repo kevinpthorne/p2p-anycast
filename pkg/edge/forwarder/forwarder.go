@@ -2,6 +2,7 @@ package forwarder
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -25,10 +26,15 @@ const (
 
 	// ReturnHeaderSize is 4 bytes: flow_id(4B)
 	ReturnHeaderSize = 4
+
+	// MaxActiveFlows bounds the Edge UDP flow table to prevent memory exhaustion under spoofed UDP floods.
+	MaxActiveFlows = 65536
 )
 
 var (
-	ErrPacketTooShort = errors.New("packet too short for datagram envelope")
+	ErrPacketTooShort           = errors.New("packet too short for datagram envelope")
+	ErrFlowTableFull            = errors.New("edge UDP flow table capacity exceeded")
+	ErrUnauthorizedOriginReturn = errors.New("return datagram origin peer does not match flow owner")
 )
 
 // ForwardEnvelope represents a packet forwarded from Edge to Origin.
@@ -109,6 +115,8 @@ func DecodeReturnEnvelope(data []byte) (*ReturnEnvelope, error) {
 
 type clientFlow struct {
 	flowID       uint32
+	flowKey      string
+	originPeer   peer.ID
 	clientAddr   *net.UDPAddr
 	listener     *net.UDPConn
 	lastSeenNano atomic.Int64
@@ -124,20 +132,23 @@ func (c *clientFlow) lastSeen() time.Time {
 
 // EdgeDatagramForwarder handles routing between public UDP listeners and QUIC datagrams.
 type EdgeDatagramForwarder struct {
-	mu           sync.RWMutex
-	host         host.Host
-	flowSeq      uint32
-	flowsByAddr  map[string]*clientFlow // clientAddr.String() -> flow
-	flowsByID    map[uint32]*clientFlow // flowID -> flow
-	ctx          context.Context
-	cancel       context.CancelFunc
+	mu          sync.RWMutex
+	host        host.Host
+	flowSeq     uint32
+	flowsByAddr map[string]*clientFlow // composite (listenerAddr|clientAddr) -> flow
+	flowsByID   map[uint32]*clientFlow // flowID -> flow
+	ctx         context.Context
+	cancel      context.CancelFunc
 }
 
 // NewEdgeDatagramForwarder creates a new forwarder on the Edge.
 func NewEdgeDatagramForwarder(ctx context.Context, h host.Host) *EdgeDatagramForwarder {
 	fCtx, cancel := context.WithCancel(ctx)
+	var seedBuf [4]byte
+	_, _ = rand.Read(seedBuf[:])
 	f := &EdgeDatagramForwarder{
 		host:        h,
+		flowSeq:     binary.BigEndian.Uint32(seedBuf[:]),
 		flowsByAddr: make(map[string]*clientFlow),
 		flowsByID:   make(map[uint32]*clientFlow),
 		ctx:         fCtx,
@@ -153,43 +164,96 @@ func (f *EdgeDatagramForwarder) Close() {
 	f.cancel()
 }
 
+func buildFlowKey(listener *net.UDPConn, clientAddr *net.UDPAddr) string {
+	localStr := ""
+	if listener != nil && listener.LocalAddr() != nil {
+		localStr = listener.LocalAddr().String()
+	}
+	clientStr := ""
+	if clientAddr != nil {
+		clientStr = clientAddr.String()
+	}
+	return localStr + "|" + clientStr
+}
+
+func (f *EdgeDatagramForwarder) allocateUnpredictableFlowIDLocked() uint32 {
+	var randBuf [4]byte
+	for i := 0; i < 16; i++ {
+		if _, err := rand.Read(randBuf[:]); err == nil {
+			id := binary.BigEndian.Uint32(randBuf[:])
+			if id != 0 {
+				if _, exists := f.flowsByID[id]; !exists {
+					return id
+				}
+			}
+		}
+	}
+	for {
+		id := atomic.AddUint32(&f.flowSeq, 1)
+		if id != 0 {
+			if _, exists := f.flowsByID[id]; !exists {
+				return id
+			}
+		}
+	}
+}
+
 // GetOrCreateFlow retrieves or assigns a flow ID for a client UDP address.
 func (f *EdgeDatagramForwarder) GetOrCreateFlow(clientAddr *net.UDPAddr, listener *net.UDPConn) uint32 {
-	addrStr := clientAddr.String()
+	id, _ := f.GetOrCreateFlowForOrigin(clientAddr, listener, "")
+	return id
+}
+
+// GetOrCreateFlowForOrigin retrieves or assigns an unpredictable flow ID bound to a specific listener, client UDP address, and target Origin peer.
+func (f *EdgeDatagramForwarder) GetOrCreateFlowForOrigin(clientAddr *net.UDPAddr, listener *net.UDPConn, originPeer peer.ID) (uint32, error) {
+	fKey := buildFlowKey(listener, clientAddr)
 
 	f.mu.RLock()
-	flow, ok := f.flowsByAddr[addrStr]
-	if ok {
+	flow, ok := f.flowsByAddr[fKey]
+	if ok && (originPeer == "" || flow.originPeer == originPeer) {
 		flow.touch()
+		id := flow.flowID
 		f.mu.RUnlock()
-		return flow.flowID
+		return id, nil
 	}
 	f.mu.RUnlock()
 
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
-	if flow, ok := f.flowsByAddr[addrStr]; ok {
+	if flow, ok := f.flowsByAddr[fKey]; ok {
+		if originPeer != "" && flow.originPeer != originPeer {
+			flow.originPeer = originPeer
+		}
 		flow.touch()
-		return flow.flowID
+		return flow.flowID, nil
 	}
 
-	flowID := atomic.AddUint32(&f.flowSeq, 1)
+	if len(f.flowsByID) >= MaxActiveFlows {
+		return 0, ErrFlowTableFull
+	}
+
+	flowID := f.allocateUnpredictableFlowIDLocked()
 	flow = &clientFlow{
 		flowID:     flowID,
+		flowKey:    fKey,
+		originPeer: originPeer,
 		clientAddr: clientAddr,
 		listener:   listener,
 	}
 	flow.touch()
 
-	f.flowsByAddr[addrStr] = flow
+	f.flowsByAddr[fKey] = flow
 	f.flowsByID[flowID] = flow
-	return flowID
+	return flowID, nil
 }
 
 // ForwardPacket constructs a forward envelope and sends it via QUIC datagram to the target origin.
 func (f *EdgeDatagramForwarder) ForwardPacket(targetOrigin peer.ID, bindingID [16]byte, hmacToken [16]byte, clientAddr *net.UDPAddr, listener *net.UDPConn, payload []byte) error {
-	flowID := f.GetOrCreateFlow(clientAddr, listener)
+	flowID, err := f.GetOrCreateFlowForOrigin(clientAddr, listener, targetOrigin)
+	if err != nil {
+		return err
+	}
 
 	env := &ForwardEnvelope{
 		BindingID:  bindingID,
@@ -205,8 +269,14 @@ func (f *EdgeDatagramForwarder) ForwardPacket(targetOrigin peer.ID, bindingID [1
 	return p2pquic.SendDatagram(f.host, targetOrigin, data)
 }
 
-// HandleReturnDatagram routes an incoming return datagram from an Origin back to the original client.
+// HandleReturnDatagram routes an incoming return datagram back to the original client.
 func (f *EdgeDatagramForwarder) HandleReturnDatagram(data []byte) error {
+	return f.HandleReturnDatagramFromPeer("", data)
+}
+
+// HandleReturnDatagramFromPeer verifies that the return datagram came from the Origin peer that owns the flow
+// and routes the payload back to the original client via the bound UDP listener.
+func (f *EdgeDatagramForwarder) HandleReturnDatagramFromPeer(originPeer peer.ID, data []byte) error {
 	ret, err := DecodeReturnEnvelope(data)
 	if err != nil {
 		return err
@@ -214,19 +284,33 @@ func (f *EdgeDatagramForwarder) HandleReturnDatagram(data []byte) error {
 
 	f.mu.RLock()
 	flow, ok := f.flowsByID[ret.FlowID]
+	var flowOrigin peer.ID
+	var listener *net.UDPConn
+	var clientAddr *net.UDPAddr
+	if ok && flow != nil {
+		flowOrigin = flow.originPeer
+		listener = flow.listener
+		clientAddr = flow.clientAddr
+	}
 	f.mu.RUnlock()
 
-	if !ok || flow == nil || flow.listener == nil {
+	if !ok || flow == nil || listener == nil {
 		return fmt.Errorf("unknown flow ID %d", ret.FlowID)
 	}
 
+	if originPeer != "" && flowOrigin != "" && flowOrigin != originPeer {
+		return fmt.Errorf("%w: flow %d owned by %s, got return packet from %s",
+			ErrUnauthorizedOriginReturn, ret.FlowID, flowOrigin, originPeer)
+	}
+
 	flow.touch()
-	_, err = flow.listener.WriteToUDP(ret.Payload, flow.clientAddr)
+	_, err = listener.WriteToUDP(ret.Payload, clientAddr)
 	return err
 }
 
 // StartDatagramReceiver listens on all connections from an Origin peer for return datagrams.
 func (f *EdgeDatagramForwarder) StartDatagramReceiver(conn network.Conn) {
+	remotePeer := conn.RemotePeer()
 	go func() {
 		for {
 			select {
@@ -240,8 +324,8 @@ func (f *EdgeDatagramForwarder) StartDatagramReceiver(conn network.Conn) {
 				return // Connection closed or context cancelled
 			}
 
-			if err := f.HandleReturnDatagram(data); err != nil {
-				log.Printf("[Forwarder] Failed to handle return UDP datagram: %v", err)
+			if err := f.HandleReturnDatagramFromPeer(remotePeer, data); err != nil {
+				log.Printf("[Forwarder] Failed to handle return UDP datagram from %s: %v", remotePeer, err)
 			}
 		}
 	}()
@@ -268,7 +352,8 @@ func (f *EdgeDatagramForwarder) sweepIdleFlows(now time.Time) {
 	for id, flow := range f.flowsByID {
 		if now.Sub(flow.lastSeen()) > 60*time.Second {
 			delete(f.flowsByID, id)
-			delete(f.flowsByAddr, flow.clientAddr.String())
+			delete(f.flowsByAddr, flow.flowKey)
 		}
 	}
 }
+

@@ -3,6 +3,7 @@ package nat
 import (
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"log"
 	"net"
@@ -16,14 +17,23 @@ import (
 	"p2p-anycast/pkg/control/binding"
 	"p2p-anycast/pkg/edge/forwarder"
 	"p2p-anycast/pkg/origin/dispatch"
+	identity "p2p-anycast/pkg/proto/identity"
+	"p2p-anycast/pkg/transport/auth"
 	p2pquic "p2p-anycast/pkg/transport/quic"
 )
 
 const (
-	SIPPort          = 5060
-	SIPIdleTimeout   = 60 * time.Second
-	RTPIdleTimeout   = 10 * time.Second
+	SIPPort            = 5060
+	SIPIdleTimeout     = 60 * time.Second
+	RTPIdleTimeout     = 10 * time.Second
 	DefaultIdleTimeout = 30 * time.Second
+	DefaultMaxSessions = 16384
+	MaxReturnPacketLen = 8192
+)
+
+var (
+	ErrNATTableFull        = errors.New("origin UDP NAT session table capacity exceeded")
+	ErrUnauthenticatedEdge = errors.New("peer is not an authenticated Edge router")
 )
 
 // SessionKey uniquely identifies a client flow arriving from an Edge.
@@ -52,20 +62,24 @@ func (s *SessionRecord) lastSeen() time.Time {
 
 // Table manages stateful user-space UDP NAT bindings on the Origin.
 type Table struct {
-	mu          sync.RWMutex
-	host        host.Host
-	originKey   []byte
-	routes      *dispatch.Table
-	sessions    map[SessionKey]*SessionRecord
-	ctx         context.Context
-	cancel      context.CancelFunc
-	reapTicker  *time.Ticker
+	mu              sync.RWMutex
+	host            host.Host
+	originKey       []byte
+	routes          *dispatch.Table
+	authenticator   *auth.Authenticator
+	maxSessions     int
+	sessions        map[SessionKey]*SessionRecord
+	ctx             context.Context
+	cancel          context.CancelFunc
+	reapTicker      *time.Ticker
 	onSessionClosed func(key SessionKey)
 }
 
 // Config configures the NAT table.
 type Config struct {
 	ReaperInterval  time.Duration
+	MaxSessions     int
+	Authenticator   *auth.Authenticator
 	OnSessionClosed func(key SessionKey)
 }
 
@@ -74,11 +88,17 @@ func NewTable(ctx context.Context, h host.Host, originKey []byte, routes *dispat
 	tCtx, cancel := context.WithCancel(ctx)
 
 	reaperInterval := 5 * time.Second
+	maxSessions := DefaultMaxSessions
+	var authn *auth.Authenticator
 	var onClosed func(key SessionKey)
 	if len(cfg) > 0 {
 		if cfg[0].ReaperInterval > 0 {
 			reaperInterval = cfg[0].ReaperInterval
 		}
+		if cfg[0].MaxSessions > 0 {
+			maxSessions = cfg[0].MaxSessions
+		}
+		authn = cfg[0].Authenticator
 		onClosed = cfg[0].OnSessionClosed
 	}
 
@@ -86,6 +106,8 @@ func NewTable(ctx context.Context, h host.Host, originKey []byte, routes *dispat
 		host:            h,
 		originKey:       originKey,
 		routes:          routes,
+		authenticator:   authn,
+		maxSessions:     maxSessions,
 		sessions:        make(map[SessionKey]*SessionRecord),
 		ctx:             tCtx,
 		cancel:          cancel,
@@ -95,6 +117,13 @@ func NewTable(ctx context.Context, h host.Host, originKey []byte, routes *dispat
 
 	go t.reaperLoop()
 	return t
+}
+
+// SetAuthenticator configures the Authenticator used to verify that incoming datagrams originate from an authenticated Edge router.
+func (t *Table) SetAuthenticator(a *auth.Authenticator) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.authenticator = a
 }
 
 // Close terminates all ephemeral sockets and stops the reaper.
@@ -113,6 +142,17 @@ func (t *Table) Close() {
 
 // HandleForwardDatagram processes an incoming forward envelope from an Edge.
 func (t *Table) HandleForwardDatagram(edgePeer peer.ID, data []byte) error {
+	t.mu.RLock()
+	authn := t.authenticator
+	t.mu.RUnlock()
+
+	if authn != nil {
+		claims, ok := authn.GetSession(edgePeer)
+		if !ok || claims == nil || claims.Role != identity.NodeRole_EDGE_ROUTER {
+			return ErrUnauthenticatedEdge
+		}
+	}
+
 	env, err := forwarder.DecodeForwardEnvelope(data)
 	if err != nil {
 		return err
@@ -125,13 +165,15 @@ func (t *Table) HandleForwardDatagram(edgePeer peer.ID, data []byte) error {
 		ClientPort: env.ClientPort,
 	}
 
-	// 1. Fast Path: Concurrent Read Lock Check (bypasses DNS resolution, HMAC calculation, and global write locks)
+	// 1. Fast Path: Concurrent Read Lock Check
 	t.mu.RLock()
 	session, exists := t.sessions[sessionKey]
 	if exists {
 		session.touch()
+		conn := session.ephemeralConn
+		target := session.targetAddr
 		t.mu.RUnlock()
-		_, err := session.ephemeralConn.WriteToUDP(env.Payload, session.targetAddr)
+		_, err := conn.WriteToUDP(env.Payload, target)
 		return err
 	}
 	t.mu.RUnlock()
@@ -143,8 +185,8 @@ func (t *Table) HandleForwardDatagram(edgePeer peer.ID, data []byte) error {
 		return fmt.Errorf("no route for binding ID")
 	}
 
-	// 2b. Verify HMAC Token (supports Origin-scoped mesh capability token + legacy Edge-scoped fallback)
-	if !binding.VerifyHMACWithFallback(t.originKey, t.host.ID().String(), edgePeer.String(), route.PublicPort, env.BindingID, env.HMACToken[:]) {
+	// 2b. Verify HMAC Token strictly bound to the remote Edge's Peer ID
+	if !binding.VerifyHMAC(t.originKey, edgePeer.String(), route.PublicPort, env.BindingID, env.HMACToken[:]) {
 		return fmt.Errorf("HMAC verification failed")
 	}
 
@@ -158,6 +200,11 @@ func (t *Table) HandleForwardDatagram(edgePeer peer.ID, data []byte) error {
 	t.mu.Lock()
 	session, exists = t.sessions[sessionKey]
 	if !exists {
+		if len(t.sessions) >= t.maxSessions {
+			t.mu.Unlock()
+			return ErrNATTableFull
+		}
+
 		// Bind ephemeral UDP socket (wildcard so kernel routes to target subnet)
 		conn, err := net.ListenUDP("udp", &net.UDPAddr{Port: 0})
 		if err != nil {
@@ -165,8 +212,8 @@ func (t *Table) HandleForwardDatagram(edgePeer peer.ID, data []byte) error {
 			return fmt.Errorf("failed to allocate ephemeral UDP socket: %w", err)
 		}
 
-		_ = conn.SetReadBuffer(4 * 1024 * 1024)
-		_ = conn.SetWriteBuffer(4 * 1024 * 1024)
+		_ = conn.SetReadBuffer(256 * 1024)
+		_ = conn.SetWriteBuffer(256 * 1024)
 
 		session = &SessionRecord{
 			key:           sessionKey,
@@ -178,21 +225,22 @@ func (t *Table) HandleForwardDatagram(edgePeer peer.ID, data []byte) error {
 		t.sessions[sessionKey] = session
 
 		// Spawn receiver goroutine for return packets
-		go t.receiveReturnTraffic(edgePeer, env.FlowID, conn)
+		go t.receiveReturnTraffic(edgePeer, env.FlowID, conn, targetAddr)
 	} else {
 		session.touch()
 	}
+	conn := session.ephemeralConn
+	target := session.targetAddr
 	t.mu.Unlock()
 
 	// 3. Forward packet from ephemeral socket to backend
-	_, err = session.ephemeralConn.WriteToUDP(env.Payload, session.targetAddr)
+	_, err = conn.WriteToUDP(env.Payload, target)
 	return err
 }
 
 // receiveReturnTraffic listens on the ephemeral socket for backend return packets and dispatches them via QUIC datagrams.
-func (t *Table) receiveReturnTraffic(edgePeer peer.ID, flowID uint32, conn *net.UDPConn) {
-	buf := make([]byte, 65535)
-	sendBuf := make([]byte, forwarder.ReturnHeaderSize+65535)
+func (t *Table) receiveReturnTraffic(edgePeer peer.ID, flowID uint32, conn *net.UDPConn, expectedTarget *net.UDPAddr) {
+	sendBuf := make([]byte, forwarder.ReturnHeaderSize+MaxReturnPacketLen)
 	binary.BigEndian.PutUint32(sendBuf[0:4], flowID)
 
 	for {
@@ -202,12 +250,20 @@ func (t *Table) receiveReturnTraffic(edgePeer peer.ID, flowID uint32, conn *net.
 		default:
 		}
 
-		n, _, err := conn.ReadFromUDP(buf)
+		n, fromAddr, err := conn.ReadFromUDP(sendBuf[forwarder.ReturnHeaderSize:])
 		if err != nil {
 			return // Socket closed
 		}
 
-		copy(sendBuf[forwarder.ReturnHeaderSize:forwarder.ReturnHeaderSize+n], buf[:n])
+		if expectedTarget != nil && fromAddr != nil {
+			if fromAddr.Port != expectedTarget.Port {
+				continue
+			}
+			if !expectedTarget.IP.IsUnspecified() && !fromAddr.IP.Equal(expectedTarget.IP) {
+				continue
+			}
+		}
+
 		if err := p2pquic.SendDatagram(t.host, edgePeer, sendBuf[:forwarder.ReturnHeaderSize+n]); err != nil {
 			log.Printf("[NAT] Warning: failed to send return datagram to edge %s for flow %d: %v", edgePeer, flowID, err)
 		}
@@ -261,3 +317,4 @@ func (t *Table) ActiveSessionCount() int {
 	defer t.mu.RUnlock()
 	return len(t.sessions)
 }
+

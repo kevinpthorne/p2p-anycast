@@ -5,11 +5,40 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/binary"
+	"errors"
 
 	"lukechampine.com/blake3"
 
 	control "p2p-anycast/pkg/proto/control"
 )
+
+const (
+	// MinMasterKeySize is the minimum entropy length (256 bits) required for an Origin HMAC master key.
+	MinMasterKeySize = 32
+)
+
+var (
+	ErrWeakMasterKey = errors.New("origin master key must be at least 32 non-zero bytes (256 bits)")
+)
+
+// ValidateMasterKey verifies that an Origin HMAC master key meets the 256-bit minimum length
+// and is not all zeros.
+func ValidateMasterKey(key []byte) error {
+	if len(key) < MinMasterKeySize {
+		return ErrWeakMasterKey
+	}
+	allZero := true
+	for _, b := range key {
+		if b != 0 {
+			allZero = false
+			break
+		}
+	}
+	if allZero {
+		return ErrWeakMasterKey
+	}
+	return nil
+}
 
 // DeriveBindingID computes the deterministic 128-bit BLAKE3 binding_id.
 // binding_id = Truncate_128(BLAKE3(service_id || protocol || public_port || sni_hostname))
@@ -36,11 +65,11 @@ func DeriveBindingID(serviceID string, protocol control.TransportProtocol, publi
 	return bindingID
 }
 
-// GenerateHMAC computes the 128-bit HMAC capability token for a service binding.
-// HMAC = Truncate_128(HMAC-SHA256(K_origin, OriginPeerID || public_port || binding_id))
-func GenerateHMAC(originKey []byte, peerScopeID string, publicPort uint32, bindingID [16]byte) [16]byte {
+// GenerateHMAC computes the 128-bit HMAC capability token for a service binding scoped strictly to a specific Edge Peer ID.
+// HMAC = Truncate_128(HMAC-SHA256(K_origin, EdgePeerID || public_port || binding_id))
+func GenerateHMAC(originKey []byte, edgePeerID string, publicPort uint32, bindingID [16]byte) [16]byte {
 	mac := hmac.New(sha256.New, originKey)
-	mac.Write([]byte(peerScopeID))
+	mac.Write([]byte(edgePeerID))
 
 	var portBuf [4]byte
 	binary.BigEndian.PutUint32(portBuf[:], publicPort)
@@ -54,23 +83,12 @@ func GenerateHMAC(originKey []byte, peerScopeID string, publicPort uint32, bindi
 	return token
 }
 
-// VerifyHMAC validates an incoming 16-byte HMAC token in constant time.
-func VerifyHMAC(originKey []byte, peerScopeID string, publicPort uint32, bindingID [16]byte, token []byte) bool {
-	if len(token) != 16 {
+// VerifyHMAC validates an incoming 16-byte HMAC token strictly against the remote Edge's Peer ID in constant time.
+func VerifyHMAC(originKey []byte, edgePeerID string, publicPort uint32, bindingID [16]byte, token []byte) bool {
+	if len(token) != 16 || edgePeerID == "" {
 		return false
 	}
-	expected := GenerateHMAC(originKey, peerScopeID, publicPort, bindingID)
+	expected := GenerateHMAC(originKey, edgePeerID, publicPort, bindingID)
 	return subtle.ConstantTimeCompare(expected[:], token) == 1
 }
 
-// VerifyHMACWithFallback validates an incoming 16-byte HMAC token against the OriginPeerID
-// (canonical for mesh/DHT broadcast registrations) and falls back to EdgePeerID for backwards compatibility.
-func VerifyHMACWithFallback(originKey []byte, originPeerID string, edgePeerID string, publicPort uint32, bindingID [16]byte, token []byte) bool {
-	if VerifyHMAC(originKey, originPeerID, publicPort, bindingID, token) {
-		return true
-	}
-	if edgePeerID != "" && edgePeerID != originPeerID {
-		return VerifyHMAC(originKey, edgePeerID, publicPort, bindingID, token)
-	}
-	return false
-}

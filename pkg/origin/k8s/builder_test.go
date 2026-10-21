@@ -288,3 +288,61 @@ func TestBuildFromServiceSNIHostnames(t *testing.T) {
 		t.Errorf("expected target cilium-gateway, got %q", res[0].Target)
 	}
 }
+
+func TestValidateTargetEndpointSSRFProtection(t *testing.T) {
+	// 1. Forbidden targets must fail ValidateTargetEndpoint
+	forbidden := []string{
+		"unix:///var/run/docker.sock",
+		"169.254.169.254:80",
+		"127.0.0.1:8080",
+		"[::1]:8080",
+		"localhost:8080",
+		"kubernetes.default.svc.cluster.local:443",
+		"kubernetes.default:443",
+		"10.96.0.1:6443",
+		"10.0.0.10:10250",
+		"10.0.0.10:2379",
+		"0.0.0.0:8080",
+	}
+	for _, target := range forbidden {
+		if err := ValidateTargetEndpoint(target, false); err == nil {
+			t.Errorf("expected SSRF target %q to be rejected with allowLocalhost=false, but it passed", target)
+		}
+	}
+
+	// 2. Even with allowLocalhost=true, control plane ports (kubelet 10250, apiserver 6443, etcd 2379) and unix sockets must be rejected
+	if err := ValidateTargetEndpoint("127.0.0.1:10250", true); err == nil {
+		t.Error("expected kubelet port 10250 on localhost to be rejected even when allowLocalhost=true")
+	}
+	if err := ValidateTargetEndpoint("unix:///var/run/containerd.sock", true); err == nil {
+		t.Error("expected unix socket target to be rejected even when allowLocalhost=true")
+	}
+
+	// 3. Valid cluster service FQDN and non-reserved localhost port (when allowLocalhost=true) must pass
+	if err := ValidateTargetEndpoint("my-app.production.svc.cluster.local:8443", false); err != nil {
+		t.Errorf("expected valid cluster FQDN to pass: %v", err)
+	}
+	if err := ValidateTargetEndpoint("127.0.0.1:5060", true); err != nil {
+		t.Errorf("expected localhost:5060 with allowLocalhost=true to pass: %v", err)
+	}
+
+	// 4. Verify BuildServicesFromK8s filters out a Service with an SSRF target annotation
+	ssrfServices := []Service{
+		{
+			Metadata: ObjectMeta{
+				Name:      "malicious-svc",
+				Namespace: "default",
+				Annotations: map[string]string{
+					"p2p-anycast.io/expose": "true",
+					"p2p-anycast.io/target": "169.254.169.254:80",
+				},
+			},
+			Spec: ServiceSpec{
+				Ports: []ServicePort{{Name: "http", Port: 80, Protocol: "TCP"}},
+			},
+		},
+	}
+	if got := BuildServicesFromK8s(ssrfServices, nil, BuilderOptions{}); len(got) != 0 {
+		t.Fatalf("expected SSRF service target to be filtered out, got %d configs", len(got))
+	}
+}

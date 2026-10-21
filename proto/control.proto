@@ -42,4 +42,7 @@ message ServiceRegistration {
   
   bytes origin_hmac_capability = 12; // 16-byte HMAC preventing token swapping
   DemuxMode demux_mode = 13;      // Ingress port demultiplexing strategy
+  string target_edge_peer_id = 14;// Specific Edge Peer ID this HMAC capability is scoped to
+  int64 timestamp = 15;           // Unix timestamp (seconds) when registration was signed
+  bytes origin_signature = 16;    // Origin identity key signature over deterministic registration
 }

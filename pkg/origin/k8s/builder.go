@@ -2,6 +2,8 @@ package k8s
 
 import (
 	"fmt"
+	"log"
+	"net"
 	"strconv"
 	"strings"
 
@@ -11,8 +13,77 @@ import (
 
 // BuilderOptions configures the Kubernetes service and TLSRoute configuration builder.
 type BuilderOptions struct {
-	AnnotationPrefix     string // Custom prefix (default: p2p-anycast.io and anycast.io)
-	DefaultGatewayTarget string // Fallback gateway target (e.g. cilium-gateway.kube-system.svc.cluster.local:443)
+	AnnotationPrefix      string // Custom prefix (default: p2p-anycast.io and anycast.io)
+	DefaultGatewayTarget  string // Fallback gateway target (e.g. cilium-gateway.kube-system.svc.cluster.local:443)
+	AllowLocalhostTargets bool   // Allow explicit raw target annotations pointing to 127.0.0.1/localhost
+}
+
+// ValidateTargetEndpoint validates a backend target string produced from Kubernetes
+// annotations to prevent Server-Side Request Forgery (SSRF) against the node host,
+// Unix domain sockets, cloud metadata services (169.254.169.254), or Kubernetes control plane ports.
+func ValidateTargetEndpoint(target string, allowLocalhost bool) error {
+	target = strings.TrimSpace(target)
+	if target == "" {
+		return fmt.Errorf("empty target endpoint")
+	}
+
+	lower := strings.ToLower(target)
+	if strings.HasPrefix(lower, "unix://") {
+		return fmt.Errorf("unix domain socket targets (%q) are forbidden from Kubernetes annotations", target)
+	}
+
+	host, portStr, err := net.SplitHostPort(target)
+	if err != nil {
+		return fmt.Errorf("invalid target host:port %q: %w", target, err)
+	}
+
+	port, err := strconv.Atoi(portStr)
+	if err != nil || port <= 0 || port > 65535 {
+		return fmt.Errorf("invalid target port in %q", target)
+	}
+
+	// Block sensitive control-plane and host management ports (API server, etcd, kubelet)
+	switch port {
+	case 2379, 2380, 6443, 10250, 10255, 10257, 10259:
+		return fmt.Errorf("target port %d in %q is reserved for cluster control plane", port, target)
+	}
+
+	hostLower := strings.ToLower(strings.TrimSpace(host))
+	if hostLower == "" {
+		return fmt.Errorf("empty target host in %q", target)
+	}
+
+	// Block Kubernetes default API service hostnames
+	if hostLower == "kubernetes" ||
+		hostLower == "kubernetes.default" ||
+		strings.HasPrefix(hostLower, "kubernetes.default.") {
+		return fmt.Errorf("target host %q is forbidden (Kubernetes API server)", host)
+	}
+
+	if hostLower == "localhost" || strings.HasSuffix(hostLower, ".localhost") {
+		if !allowLocalhost {
+			return fmt.Errorf("localhost target %q is not permitted via raw target annotation", target)
+		}
+		return nil
+	}
+
+	if ip := net.ParseIP(host); ip != nil {
+		if ip.IsUnspecified() || ip.IsMulticast() {
+			return fmt.Errorf("unspecified or multicast target IP %s is forbidden", ip.String())
+		}
+		if ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() {
+			return fmt.Errorf("link-local / cloud metadata target IP %s is forbidden", ip.String())
+		}
+		// Explicitly check 169.254.0.0/16 metadata range
+		if ip4 := ip.To4(); ip4 != nil && ip4[0] == 169 && ip4[1] == 254 {
+			return fmt.Errorf("cloud metadata range 169.254.0.0/16 (%s) is forbidden", ip.String())
+		}
+		if ip.IsLoopback() && !allowLocalhost {
+			return fmt.Errorf("loopback target IP %s is not permitted via raw target annotation", ip.String())
+		}
+	}
+
+	return nil
 }
 
 // BuildServicesFromK8s transforms Kubernetes Service and TLSRoute objects into dialer.ServiceConfig entries.
@@ -133,6 +204,10 @@ func buildFromService(svc Service, opts BuilderOptions) []dialer.ServiceConfig {
 		if target == "" {
 			target = fmt.Sprintf("%s.%s.svc.cluster.local:443", svcName, ns)
 		}
+		if err := ValidateTargetEndpoint(target, opts.AllowLocalhostTargets); err != nil {
+			log.Printf("[K8sBuilder] Rejecting unsafe target for service %s/%s: %v", ns, svcName, err)
+			return nil
+		}
 
 		baseID := getAnnotation(annos, "service-id", opts.AnnotationPrefix)
 		if baseID == "" {
@@ -177,6 +252,10 @@ func buildFromService(svc Service, opts BuilderOptions) []dialer.ServiceConfig {
 			} else {
 				target = fmt.Sprintf("%s.%s.svc.cluster.local:443", svcName, ns)
 			}
+		}
+		if err := ValidateTargetEndpoint(target, opts.AllowLocalhostTargets); err != nil {
+			log.Printf("[K8sBuilder] Rejecting unsafe target for service %s/%s: %v", ns, svcName, err)
+			return nil
 		}
 
 		sID := getAnnotation(annos, "service-id", opts.AnnotationPrefix)
@@ -289,15 +368,21 @@ func buildFromService(svc Service, opts BuilderOptions) []dialer.ServiceConfig {
 		}
 
 		target := perPortTarget
+		allowLocal := opts.AllowLocalhostTargets
 		if target == "" {
 			targetType := strings.ToLower(getAnnotation(annos, "target-type", opts.AnnotationPrefix))
 			if (targetType == "cluster-ip" || targetType == "clusterip") && svc.Spec.ClusterIP != "" && svc.Spec.ClusterIP != "None" {
 				target = fmt.Sprintf("%s:%d", svc.Spec.ClusterIP, port.Port)
 			} else if targetType == "localhost" || targetType == "pod" {
 				target = fmt.Sprintf("127.0.0.1:%d", port.Port)
+				allowLocal = true
 			} else {
 				target = fmt.Sprintf("%s.%s.svc.cluster.local:%d", svcName, ns, port.Port)
 			}
+		}
+		if err := ValidateTargetEndpoint(target, allowLocal); err != nil {
+			log.Printf("[K8sBuilder] Rejecting unsafe target for service %s/%s port %d: %v", ns, svcName, port.Port, err)
+			continue
 		}
 
 		// Proxy Protocol
@@ -379,6 +464,11 @@ func buildFromTLSRoute(route TLSRoute, opts BuilderOptions) []dialer.ServiceConf
 		} else if opts.DefaultGatewayTarget != "" {
 			target = opts.DefaultGatewayTarget
 		}
+	}
+
+	if err := ValidateTargetEndpoint(target, opts.AllowLocalhostTargets); err != nil {
+		log.Printf("[K8sBuilder] Rejecting unsafe target for TLSRoute %s/%s: %v", ns, routeName, err)
+		return nil
 	}
 
 	baseID := getAnnotation(annos, "service-id", opts.AnnotationPrefix)

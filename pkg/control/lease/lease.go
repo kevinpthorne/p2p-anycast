@@ -3,6 +3,7 @@ package lease
 import (
 	"errors"
 	"fmt"
+	"sort"
 	"sync"
 	"time"
 
@@ -10,19 +11,22 @@ import (
 )
 
 const (
-	DefaultLeaseTTL         = 60 * time.Second
+	DefaultLeaseTTL          = 60 * time.Second
+	MaxLeaseTTL              = 300 * time.Second
 	DefaultHeartbeatInterval = 20 * time.Second
-	MaxMissedHeartbeats     = 3
+	MaxMissedHeartbeats      = 3
 )
 
 var (
-	ErrFencingEpochStale   = errors.New("lease epoch is stale (fenced out)")
+	ErrFencingEpochStale    = errors.New("lease epoch is stale (fenced out)")
 	ErrRegistrationNotFound = errors.New("service registration not found")
-	ErrSingletonConflict   = errors.New("strict singleton port already occupied by an active origin")
+	ErrSingletonConflict    = errors.New("strict singleton port already occupied by an active origin")
+	ErrPolicyConflict       = errors.New("routing policy or demux mode conflict on existing port/SNI binding")
 )
 
 type LeaseRecord struct {
 	Registration  *control.ServiceRegistration
+	RegisteredAt  time.Time
 	LastHeartbeat time.Time
 	ExpiresAt     time.Time
 	Active        bool
@@ -57,8 +61,8 @@ type singletonState struct {
 
 // Config allows configuring lease parameters.
 type Config struct {
-	OnRegister func(reg *control.ServiceRegistration)
-	OnEvict    func(reg *control.ServiceRegistration)
+	OnRegister     func(reg *control.ServiceRegistration)
+	OnEvict        func(reg *control.ServiceRegistration)
 	ReaperInterval time.Duration
 }
 
@@ -102,8 +106,28 @@ func (m *Manager) Register(reg *control.ServiceRegistration) error {
 	if ttl <= 0 {
 		ttl = DefaultLeaseTTL
 	}
+	if ttl > MaxLeaseTTL {
+		ttl = MaxLeaseTTL
+	}
 
 	now := time.Now()
+
+	// Reject cross-demux conflicts on the same PublicPort or cross-policy conflicts on the same (PublicPort, SniHostname)
+	for _, existing := range m.records {
+		if existing.Registration.PublicPort == reg.PublicPort &&
+			existing.Registration.OriginPeerId != reg.OriginPeerId {
+			if existing.Registration.DemuxMode != reg.DemuxMode {
+				return fmt.Errorf("%w: port %d active with demux %v, rejecting demux %v",
+					ErrPolicyConflict, reg.PublicPort, existing.Registration.DemuxMode, reg.DemuxMode)
+			}
+			if existing.Registration.SniHostname == reg.SniHostname &&
+				existing.Registration.Policy != reg.Policy {
+				return fmt.Errorf("%w: port %d (sni %q) active with policy %v, rejecting %v",
+					ErrPolicyConflict, reg.PublicPort, reg.SniHostname,
+					existing.Registration.Policy, reg.Policy)
+			}
+		}
+	}
 
 	// Enforce STRICT_SINGLETON fencing per (port, sniHostname)
 	if reg.Policy == control.RoutingPolicy_STRICT_SINGLETON {
@@ -144,6 +168,7 @@ func (m *Manager) Register(reg *control.ServiceRegistration) error {
 	if isNew {
 		rec = &LeaseRecord{
 			Registration: reg,
+			RegisteredAt: now,
 			Active:       true,
 		}
 		m.records[key] = rec
@@ -187,6 +212,9 @@ func (m *Manager) Heartbeat(originPeerID string, bindingID [16]byte, epoch uint6
 	if ttl <= 0 {
 		ttl = DefaultLeaseTTL
 	}
+	if ttl > MaxLeaseTTL {
+		ttl = MaxLeaseTTL
+	}
 
 	rec.LastHeartbeat = now
 	rec.ExpiresAt = now.Add(ttl)
@@ -215,7 +243,7 @@ func (m *Manager) EvictPeer(originPeerID string) []*control.ServiceRegistration 
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	keys := m.peerBindings[originPeerID]
+	keys := append([]leaseKey(nil), m.peerBindings[originPeerID]...)
 	var evicted []*control.ServiceRegistration
 
 	for _, key := range keys {
@@ -232,8 +260,19 @@ func (m *Manager) EvictPeer(originPeerID string) []*control.ServiceRegistration 
 func (m *Manager) evictRecord(key leaseKey, rec *LeaseRecord) {
 	delete(m.records, key)
 
-	var bID [16]byte
-	copy(bID[:], rec.Registration.BindingId)
+	if bindings, ok := m.peerBindings[key.originPeerID]; ok {
+		filtered := bindings[:0]
+		for _, k := range bindings {
+			if k != key {
+				filtered = append(filtered, k)
+			}
+		}
+		if len(filtered) == 0 {
+			delete(m.peerBindings, key.originPeerID)
+		} else {
+			m.peerBindings[key.originPeerID] = filtered
+		}
+	}
 
 	// Clean up singleton tracking if applicable
 	if rec.Registration.Policy == control.RoutingPolicy_STRICT_SINGLETON {
@@ -278,43 +317,54 @@ func (m *Manager) sweepExpired(now time.Time) {
 	m.mu.Unlock()
 }
 
-// GetRegistrationsForPort returns all active registrations for the given port.
+func sortRecordsDeterministically(recs []*LeaseRecord) []*control.ServiceRegistration {
+	sort.Slice(recs, func(i, j int) bool {
+		if !recs[i].RegisteredAt.Equal(recs[j].RegisteredAt) {
+			return recs[i].RegisteredAt.Before(recs[j].RegisteredAt)
+		}
+		return recs[i].Registration.OriginPeerId < recs[j].Registration.OriginPeerId
+	})
+	result := make([]*control.ServiceRegistration, len(recs))
+	for i, r := range recs {
+		result[i] = r.Registration
+	}
+	return result
+}
+
+// GetRegistrationsForPort returns all active registrations for the given port in deterministic order.
 func (m *Manager) GetRegistrationsForPort(port uint32) []*control.ServiceRegistration {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	var result []*control.ServiceRegistration
+	var recs []*LeaseRecord
 	for _, rec := range m.records {
 		if rec.Registration.PublicPort == port {
-			result = append(result, rec.Registration)
+			recs = append(recs, rec)
 		}
 	}
-	return result
+	return sortRecordsDeterministically(recs)
 }
 
-// GetRegistrationByBindingID returns the first active registration for a specific binding_id.
+// GetRegistrationByBindingID returns the primary (earliest registered) active registration for a specific binding_id.
 func (m *Manager) GetRegistrationByBindingID(bindingID [16]byte) (*control.ServiceRegistration, bool) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	for key, rec := range m.records {
-		if key.bindingID == bindingID {
-			return rec.Registration, true
-		}
+	regs := m.GetRegistrationsByBindingID(bindingID)
+	if len(regs) == 0 {
+		return nil, false
 	}
-	return nil, false
+	return regs[0], true
 }
 
-// GetRegistrationsByBindingID returns all active registrations for a specific binding_id across all origins.
+// GetRegistrationsByBindingID returns all active registrations for a specific binding_id across all origins in deterministic order.
 func (m *Manager) GetRegistrationsByBindingID(bindingID [16]byte) []*control.ServiceRegistration {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	var result []*control.ServiceRegistration
+	var recs []*LeaseRecord
 	for key, rec := range m.records {
 		if key.bindingID == bindingID {
-			result = append(result, rec.Registration)
+			recs = append(recs, rec)
 		}
 	}
-	return result
+	return sortRecordsDeterministically(recs)
 }
+

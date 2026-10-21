@@ -90,6 +90,10 @@ func NewOriginNode(ctx context.Context, cfg Config) (*OriginNode, error) {
 		cancel:        cancel,
 	}
 
+	if cfg.NATTable != nil && cfg.Authenticator != nil {
+		cfg.NATTable.SetAuthenticator(cfg.Authenticator)
+	}
+
 	// Register routes in dispatch table
 	for _, svc := range cfg.Services {
 		bID := binding.DeriveBindingID(svc.ServiceID, svc.Protocol, svc.PublicPort, svc.SNIHostname)
@@ -134,10 +138,11 @@ func (o *OriginNode) Close() {
 	o.cancel()
 }
 
-// UpdateServices updates the active services list, updates the dispatch routes,
-// and announces the new services immediately to all connected edges.
+// UpdateServices updates the active services list, prunes removed dispatch routes,
+// revokes removed services on connected edges, and announces the current services.
 func (o *OriginNode) UpdateServices(services []ServiceConfig) {
 	o.mu.Lock()
+	oldServices := o.services
 	o.services = services
 	o.leaseEpoch++
 	active := make([]peer.ID, 0, len(o.activeEdges))
@@ -146,8 +151,10 @@ func (o *OriginNode) UpdateServices(services []ServiceConfig) {
 	}
 	o.mu.Unlock()
 
+	newBindings := make(map[[16]byte]bool, len(services))
 	for _, svc := range services {
 		bID := binding.DeriveBindingID(svc.ServiceID, svc.Protocol, svc.PublicPort, svc.SNIHostname)
+		newBindings[bID] = true
 		o.routes.AddRoute(dispatch.Route{
 			BindingID:  bID,
 			Target:     svc.Target,
@@ -157,9 +164,51 @@ func (o *OriginNode) UpdateServices(services []ServiceConfig) {
 		})
 	}
 
+	var removed []ServiceConfig
+	for _, oldSvc := range oldServices {
+		bID := binding.DeriveBindingID(oldSvc.ServiceID, oldSvc.Protocol, oldSvc.PublicPort, oldSvc.SNIHostname)
+		if !newBindings[bID] {
+			o.routes.RemoveRoute(bID)
+			removed = append(removed, oldSvc)
+		}
+	}
+
 	for _, edgePeer := range active {
+		if len(removed) > 0 {
+			o.revokeServicesOnEdge(edgePeer, removed)
+		}
 		o.announceServicesToEdge(edgePeer)
 	}
+}
+
+func (o *OriginNode) revokeServicesOnEdge(edgePeer peer.ID, removed []ServiceConfig) {
+	originPeerID := o.host.ID().String()
+	now := time.Now().Unix()
+	regs := make([]*control.ServiceRegistration, 0, len(removed))
+	for _, svc := range removed {
+		bID := binding.DeriveBindingID(svc.ServiceID, svc.Protocol, svc.PublicPort, svc.SNIHostname)
+		regs = append(regs, &control.ServiceRegistration{
+			Type:             control.MessageType_REVOKE,
+			BindingId:        bID[:],
+			ServiceId:        svc.ServiceID,
+			OriginPeerId:     originPeerID,
+			Protocol:         svc.Protocol,
+			PublicPort:       svc.PublicPort,
+			Policy:           svc.Policy,
+			SniHostname:      svc.SNIHostname,
+			TargetEdgePeerId: edgePeer.String(),
+			Timestamp:        now,
+		})
+	}
+
+	go func() {
+		revCtx, cancel := context.WithTimeout(o.ctx, 5*time.Second)
+		_ = o.registry.PublishDirect(revCtx, edgePeer, regs...)
+		cancel()
+		for _, reg := range regs {
+			_ = o.registry.Publish(o.ctx, reg)
+		}
+	}()
 }
 
 // maintainConnection persists an outbound QUIC connection to an Edge with exponential backoff.
@@ -226,19 +275,22 @@ func (o *OriginNode) maintainConnection(addr multiaddr.Multiaddr) {
 	}
 }
 
-func (o *OriginNode) buildServiceRegistrations(msgType control.MessageType) []*control.ServiceRegistration {
+func (o *OriginNode) buildServiceRegistrations(edgePeer peer.ID, msgType control.MessageType) []*control.ServiceRegistration {
 	o.mu.RLock()
 	svcs := make([]ServiceConfig, len(o.services))
 	copy(svcs, o.services)
+	epoch := o.leaseEpoch
 	o.mu.RUnlock()
 
 	originPeerID := o.host.ID().String()
+	edgePeerStr := edgePeer.String()
+	now := time.Now().Unix()
 	regs := make([]*control.ServiceRegistration, 0, len(svcs))
 
 	for _, svc := range svcs {
 		bID := binding.DeriveBindingID(svc.ServiceID, svc.Protocol, svc.PublicPort, svc.SNIHostname)
-		// Scope capability token to OriginPeerID so GossipSub / DHT mesh broadcasts are valid across all Edges
-		token := binding.GenerateHMAC(o.originKey, originPeerID, svc.PublicPort, bID)
+		// Scope capability token strictly to the target Edge's Peer ID so no other peer can replay it
+		token := binding.GenerateHMAC(o.originKey, edgePeerStr, svc.PublicPort, bID)
 
 		demuxMode := control.DemuxMode_DEMUX_PORT
 		if svc.SNIHostname != "" {
@@ -256,9 +308,11 @@ func (o *OriginNode) buildServiceRegistrations(msgType control.MessageType) []*c
 			SniHostname:          svc.SNIHostname,
 			DemuxMode:            demuxMode,
 			LeaseDurationSec:     60,
-			LeaseEpoch:           o.leaseEpoch,
+			LeaseEpoch:           epoch,
 			EnableProxyProtocol:  svc.EnableProxyProtocol,
 			OriginHmacCapability: token[:],
+			TargetEdgePeerId:     edgePeerStr,
+			Timestamp:            now,
 		})
 	}
 
@@ -267,7 +321,7 @@ func (o *OriginNode) buildServiceRegistrations(msgType control.MessageType) []*c
 
 func (o *OriginNode) announceServicesToEdge(edgePeer peer.ID) {
 	go func() {
-		regs := o.buildServiceRegistrations(control.MessageType_ANNOUNCE)
+		regs := o.buildServiceRegistrations(edgePeer, control.MessageType_ANNOUNCE)
 		if len(regs) == 0 {
 			return
 		}
@@ -281,7 +335,7 @@ func (o *OriginNode) announceServicesToEdge(edgePeer peer.ID) {
 		}
 		cancel()
 
-		// 2. Also publish to GossipSub mesh so multi-hop / DHT mesh peers receive announcements
+		// 2. Also publish to GossipSub mesh (with TargetEdgePeerId set) so multi-hop mesh peers deliver to target Edge
 		for attempt := 1; attempt <= 2; attempt++ {
 			time.Sleep(time.Duration(attempt*150) * time.Millisecond)
 			for _, reg := range regs {
@@ -319,18 +373,16 @@ func (o *OriginNode) publishHeartbeats() {
 		return
 	}
 
-	regs := o.buildServiceRegistrations(control.MessageType_HEARTBEAT)
-	if len(regs) == 0 {
-		return
-	}
-
-	// 1. Broadcast once per service over GossipSub mesh
-	for _, reg := range regs {
-		_ = o.registry.Publish(o.ctx, reg)
-	}
-
-	// 2. Also push directly to connected bootstrap edges for guaranteed delivery
 	for _, edgePeer := range active {
+		regs := o.buildServiceRegistrations(edgePeer, control.MessageType_HEARTBEAT)
+		if len(regs) == 0 {
+			continue
+		}
+
+		for _, reg := range regs {
+			_ = o.registry.Publish(o.ctx, reg)
+		}
+
 		hbCtx, cancel := context.WithTimeout(o.ctx, 3*time.Second)
 		_ = o.registry.PublishDirect(hbCtx, edgePeer, regs...)
 		cancel()

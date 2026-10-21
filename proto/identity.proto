@@ -23,6 +23,7 @@ message ServiceCapability {
   string service_pattern = 1;                 // Wildcard glob: "pbx-*", "mc-smp"
   repeated AuthorizedPolicy allowed_policies = 2;
   repeated PortRange allowed_ports = 3;
+  repeated string allowed_sni_patterns = 4;   // Optional wildcard globs for TLS SNI hostnames
 }
 
 message IdentityClaims {
@@ -46,9 +47,15 @@ message SignedCapabilityManifest {
 // AuthHello is sent by the connecting node (Origin) to open mutual auth.
 message AuthHello {
   SignedCapabilityManifest manifest = 1;
+  bytes nonce = 2;                            // 32-byte CSPRNG challenge nonce from Origin
+  int64 timestamp = 3;                        // Unix timestamp (seconds)
+  bytes signature = 4;                        // Origin signature over handshake transcript
 }
 
 // AuthResponse is sent back by the receiving node (Edge) to complete mutual auth.
 message AuthResponse {
   SignedCapabilityManifest manifest = 1;
+  bytes nonce = 2;                            // 32-byte CSPRNG challenge nonce from Edge
+  int64 timestamp = 3;                        // Unix timestamp (seconds)
+  bytes signature = 4;                        // Edge signature over handshake transcript
 }

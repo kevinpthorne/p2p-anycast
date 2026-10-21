@@ -79,3 +79,65 @@ func TestSignAndVerifyManifest(t *testing.T) {
 		t.Fatal("expected error for unauthorized policy")
 	}
 }
+
+func TestCanAuthorizeServiceWithSNIAndRevocationList(t *testing.T) {
+	now := time.Now()
+	claims := &identity.IdentityClaims{
+		SerialNumber: 42,
+		IssuerId:     "root-ca",
+		SubjectId:    "origin-web-01",
+		Role:         identity.NodeRole_ORIGIN_NODE,
+		Libp2PPeerId: "12D3KooWTestPeer",
+		NotBefore:    now.Add(-1 * time.Hour).Unix(),
+		NotAfter:     now.Add(24 * time.Hour).Unix(),
+		Capabilities: []*identity.ServiceCapability{
+			{
+				ServicePattern: "web-*",
+				AllowedPolicies: []identity.AuthorizedPolicy{
+					identity.AuthorizedPolicy_POLICY_CLUSTERED_RTT,
+				},
+				AllowedPorts: []*identity.PortRange{
+					{Start: 443, End: 443},
+				},
+				AllowedSniPatterns: []string{"*.app.example.com", "exact.example.org"},
+			},
+		},
+	}
+
+	// Matching wildcard SNI
+	if err := CanAuthorizeServiceWithSNI(claims, "web-frontend", 443, identity.AuthorizedPolicy_POLICY_CLUSTERED_RTT, "portal.app.example.com"); err != nil {
+		t.Fatalf("expected wildcard SNI to be authorized, got: %v", err)
+	}
+
+	// Matching exact SNI
+	if err := CanAuthorizeServiceWithSNI(claims, "web-frontend", 443, identity.AuthorizedPolicy_POLICY_CLUSTERED_RTT, "exact.example.org"); err != nil {
+		t.Fatalf("expected exact SNI to be authorized, got: %v", err)
+	}
+
+	// Non-matching SNI must be rejected
+	if err := CanAuthorizeServiceWithSNI(claims, "web-frontend", 443, identity.AuthorizedPolicy_POLICY_CLUSTERED_RTT, "evil.other.com"); err == nil {
+		t.Fatal("expected unauthorized SNI hostname to be rejected")
+	}
+
+	// Empty SNI when capability requires AllowedSniPatterns must be rejected
+	if err := CanAuthorizeServiceWithSNI(claims, "web-frontend", 443, identity.AuthorizedPolicy_POLICY_CLUSTERED_RTT, ""); err == nil {
+		t.Fatal("expected empty SNI to be rejected when capability restricts AllowedSniPatterns")
+	}
+
+	// RevocationList checks
+	revList := NewRevocationList()
+	if revList.IsRevoked(claims) {
+		t.Fatal("expected fresh claims not to be revoked")
+	}
+
+	revList.RevokeSerial(42)
+	if !revList.IsRevoked(claims) {
+		t.Fatal("expected claims with serial 42 to be revoked")
+	}
+
+	revList2 := NewRevocationList()
+	revList2.RevokePeer("12D3KooWTestPeer")
+	if !revList2.IsRevoked(claims) {
+		t.Fatal("expected claims with peer 12D3KooWTestPeer to be revoked")
+	}
+}

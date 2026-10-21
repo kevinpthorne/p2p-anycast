@@ -2,8 +2,12 @@ package forwarder
 
 import (
 	"bytes"
+	"context"
 	"net"
 	"testing"
+	"time"
+
+	"github.com/libp2p/go-libp2p/core/peer"
 )
 
 func TestForwardEnvelopeEncodeDecode(t *testing.T) {
@@ -64,5 +68,65 @@ func TestReturnEnvelopeEncodeDecode(t *testing.T) {
 	}
 	if !bytes.Equal(decoded.Payload, env.Payload) {
 		t.Fatalf("payload mismatch")
+	}
+}
+
+func TestHandleReturnDatagramFromPeerOriginVerification(t *testing.T) {
+	fm := NewEdgeDatagramForwarder(context.Background(), nil)
+	defer fm.Close()
+
+	listenerConn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 0})
+	if err != nil {
+		t.Fatalf("failed to create listener UDP: %v", err)
+	}
+	defer listenerConn.Close()
+
+	clientConn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 0})
+	if err != nil {
+		t.Fatalf("failed to create client UDP: %v", err)
+	}
+	defer clientConn.Close()
+
+	legitOrigin := peer.ID("origin-legit")
+	spoofOrigin := peer.ID("origin-spoof")
+	clientAddr := clientConn.LocalAddr().(*net.UDPAddr)
+
+	// Register flow bound to legitOrigin
+	var flowID uint32 = 0xCAFE1234
+	cf := &clientFlow{
+		flowID:     flowID,
+		flowKey:    buildFlowKey(listenerConn, clientAddr),
+		clientAddr: clientAddr,
+		listener:   listenerConn,
+		originPeer: legitOrigin,
+	}
+	cf.touch()
+	fm.mu.Lock()
+	fm.flowsByID[flowID] = cf
+	fm.mu.Unlock()
+
+	retEnv := (&ReturnEnvelope{
+		FlowID:  flowID,
+		Payload: []byte("RETURN-PAYLOAD"),
+	}).Encode()
+
+	// 1. Return datagram from spoofOrigin MUST be rejected
+	if err := fm.HandleReturnDatagramFromPeer(spoofOrigin, retEnv); err == nil {
+		t.Fatal("expected HandleReturnDatagramFromPeer from spoofOrigin to fail")
+	}
+
+	// 2. Return datagram from legitOrigin MUST succeed and deliver to clientConn
+	if err := fm.HandleReturnDatagramFromPeer(legitOrigin, retEnv); err != nil {
+		t.Fatalf("HandleReturnDatagramFromPeer from legitOrigin failed: %v", err)
+	}
+
+	buf := make([]byte, 128)
+	_ = clientConn.SetReadDeadline(time.Now().Add(time.Second))
+	n, _, err := clientConn.ReadFromUDP(buf)
+	if err != nil {
+		t.Fatalf("client failed to receive return datagram: %v", err)
+	}
+	if string(buf[:n]) != "RETURN-PAYLOAD" {
+		t.Fatalf("unexpected payload: %s", string(buf[:n]))
 	}
 }

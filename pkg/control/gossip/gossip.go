@@ -1,6 +1,7 @@
 package gossip
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"errors"
@@ -8,8 +9,10 @@ import (
 	"io"
 	"log"
 	"sync"
+	"time"
 
 	pubsub "github.com/libp2p/go-libp2p-pubsub"
+	ic "github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
@@ -28,7 +31,93 @@ const (
 
 	// MaxRegistrationMsgSize limits individual registration protobuf messages to 64KB.
 	MaxRegistrationMsgSize = 65536
+
+	// ContextControlRegistration is the domain separation context for Origin control-plane signatures.
+	ContextControlRegistration = "p2p-anycast:control:reg:v1"
+
+	// MaxRegistrationSkewSec is the maximum clock skew / replay window (5 minutes) for signed registrations.
+	MaxRegistrationSkewSec = 300
+
+	// DirectStreamReadTimeout is the per-frame read deadline on direct registration streams.
+	DirectStreamReadTimeout = 5 * time.Second
 )
+
+var (
+	ErrInvalidOriginSignature = errors.New("invalid or missing origin non-repudiation signature on ServiceRegistration")
+	ErrStaleRegistration      = errors.New("service registration timestamp is outside allowed replay window")
+)
+
+// SignRegistration signs a ServiceRegistration using the Origin's libp2p private key for non-repudiation.
+func SignRegistration(reg *control.ServiceRegistration, priv ic.PrivKey) error {
+	if reg == nil || priv == nil {
+		return errors.New("registration and private key must not be nil")
+	}
+	if reg.Timestamp == 0 {
+		reg.Timestamp = time.Now().Unix()
+	}
+
+	payload, err := buildRegistrationSigningPayload(reg)
+	if err != nil {
+		return err
+	}
+
+	sig, err := priv.Sign(payload)
+	if err != nil {
+		return fmt.Errorf("signing ServiceRegistration: %w", err)
+	}
+	reg.OriginSignature = sig
+	return nil
+}
+
+// VerifyRegistration verifies the non-repudiable OriginSignature and freshness of a ServiceRegistration.
+func VerifyRegistration(reg *control.ServiceRegistration) error {
+	if reg == nil || reg.OriginPeerId == "" || len(reg.OriginSignature) == 0 {
+		return ErrInvalidOriginSignature
+	}
+
+	now := time.Now().Unix()
+	diff := now - reg.Timestamp
+	if diff < 0 {
+		diff = -diff
+	}
+	if reg.Timestamp == 0 || diff > MaxRegistrationSkewSec {
+		return ErrStaleRegistration
+	}
+
+	originPeer, err := peer.Decode(reg.OriginPeerId)
+	if err != nil {
+		return fmt.Errorf("%w: invalid OriginPeerId: %v", ErrInvalidOriginSignature, err)
+	}
+	pubKey, err := originPeer.ExtractPublicKey()
+	if err != nil || pubKey == nil {
+		return fmt.Errorf("%w: cannot extract public key from OriginPeerId: %v", ErrInvalidOriginSignature, err)
+	}
+
+	payload, err := buildRegistrationSigningPayload(reg)
+	if err != nil {
+		return err
+	}
+
+	ok, err := pubKey.Verify(payload, reg.OriginSignature)
+	if err != nil || !ok {
+		return ErrInvalidOriginSignature
+	}
+	return nil
+}
+
+func buildRegistrationSigningPayload(reg *control.ServiceRegistration) ([]byte, error) {
+	clone := proto.Clone(reg).(*control.ServiceRegistration)
+	clone.OriginSignature = nil
+	marshaled, err := proto.MarshalOptions{Deterministic: true}.Marshal(clone)
+	if err != nil {
+		return nil, fmt.Errorf("marshaling registration signing payload: %w", err)
+	}
+	var buf bytes.Buffer
+	buf.WriteString(ContextControlRegistration)
+	buf.WriteByte(0)
+	buf.Write(marshaled)
+	return buf.Bytes(), nil
+}
 
 // HandlerFunc is called when a valid ServiceRegistration message is received from the mesh.
 type HandlerFunc func(reg *control.ServiceRegistration)
@@ -83,10 +172,28 @@ func NewMeshRegistry(ctx context.Context, h host.Host, handler HandlerFunc, opts
 	return reg, nil
 }
 
+func (r *MeshRegistry) ensureSigned(reg *control.ServiceRegistration) error {
+	if len(reg.OriginSignature) > 0 {
+		return nil
+	}
+	if r.host == nil {
+		return nil
+	}
+	priv := r.host.Peerstore().PrivKey(r.host.ID())
+	if priv == nil {
+		return nil
+	}
+	return SignRegistration(reg, priv)
+}
+
 // Publish publishes a ServiceRegistration to the GossipSub mesh.
 func (r *MeshRegistry) Publish(ctx context.Context, reg *control.ServiceRegistration) error {
 	if reg == nil {
 		return errors.New("nil service registration")
+	}
+
+	if err := r.ensureSigned(reg); err != nil {
+		return err
 	}
 
 	data, err := proto.Marshal(reg)
@@ -109,11 +216,15 @@ func (r *MeshRegistry) PublishDirect(ctx context.Context, targetPeer peer.ID, re
 		return fmt.Errorf("failed to open direct register stream to %s: %w", targetPeer, err)
 	}
 	defer s.Close()
+	_ = s.SetWriteDeadline(time.Now().Add(DirectStreamReadTimeout))
 
 	var lenBuf [4]byte
 	for _, reg := range regs {
 		if reg == nil {
 			continue
+		}
+		if err := r.ensureSigned(reg); err != nil {
+			return err
 		}
 		data, err := proto.Marshal(reg)
 		if err != nil {
@@ -154,9 +265,11 @@ func (r *MeshRegistry) Close() error {
 func (r *MeshRegistry) handleDirectStream(s network.Stream) {
 	defer s.Close()
 	remotePeer := s.Conn().RemotePeer().String()
+	localPeer := r.host.ID().String()
 
 	var lenBuf [4]byte
 	for {
+		_ = s.SetReadDeadline(time.Now().Add(DirectStreamReadTimeout))
 		if _, err := io.ReadFull(s, lenBuf[:]); err != nil {
 			return
 		}
@@ -181,6 +294,15 @@ func (r *MeshRegistry) handleDirectStream(s network.Stream) {
 			continue
 		}
 
+		if reg.TargetEdgePeerId != "" && reg.TargetEdgePeerId != localPeer {
+			continue
+		}
+
+		if err := VerifyRegistration(&reg); err != nil {
+			log.Printf("[Gossip] Dropping direct registration with invalid Origin signature from %s: %v", remotePeer, err)
+			continue
+		}
+
 		r.mu.RLock()
 		h := r.handler
 		r.mu.RUnlock()
@@ -192,6 +314,7 @@ func (r *MeshRegistry) handleDirectStream(s network.Stream) {
 }
 
 func (r *MeshRegistry) listenLoop() {
+	localPeer := r.host.ID().String()
 	for {
 		msg, err := r.sub.Next(r.ctx)
 		if err != nil {
@@ -210,6 +333,16 @@ func (r *MeshRegistry) listenLoop() {
 			continue
 		}
 
+		// Ignore registrations targeted at a different Edge router
+		if reg.TargetEdgePeerId != "" && reg.TargetEdgePeerId != localPeer {
+			continue
+		}
+
+		if err := VerifyRegistration(&reg); err != nil {
+			log.Printf("[Gossip] Dropping GossipSub registration with invalid Origin signature from %s: %v", reg.OriginPeerId, err)
+			continue
+		}
+
 		r.mu.RLock()
 		h := r.handler
 		r.mu.RUnlock()
@@ -219,3 +352,4 @@ func (r *MeshRegistry) listenLoop() {
 		}
 	}
 }
+

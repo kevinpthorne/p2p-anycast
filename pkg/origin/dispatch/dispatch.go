@@ -53,6 +53,25 @@ func (t *Table) AddRoute(route Route) {
 	delete(t.udpCache, route.BindingID)
 }
 
+// RemoveRoute removes a route and its cached UDP resolution from the dispatch table.
+func (t *Table) RemoveRoute(bindingID [16]byte) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	delete(t.routes, bindingID)
+	delete(t.udpCache, bindingID)
+}
+
+// ListRoutes returns a snapshot of all registered routes in the dispatch table.
+func (t *Table) ListRoutes() []Route {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	out := make([]Route, 0, len(t.routes))
+	for _, r := range t.routes {
+		out = append(out, r)
+	}
+	return out
+}
+
 // GetRoute retrieves a route by its binding ID.
 func (t *Table) GetRoute(bindingID [16]byte) (Route, bool) {
 	t.mu.RLock()

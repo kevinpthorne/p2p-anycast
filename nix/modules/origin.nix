@@ -207,8 +207,13 @@ in
             && cfg.masterKeyFile != null
           ) "master.key:${toString cfg.masterKeyFile}";
         ProtectSystem = "strict";
-        ProtectHome = "read-only";
+        ProtectHome = true;
         PrivateTmp = true;
+        NoNewPrivileges = true;
+        ProtectKernelTunables = true;
+        ProtectControlGroups = true;
+        RestrictSUIDSGID = true;
+        LockPersonality = true;
       };
     };
   };

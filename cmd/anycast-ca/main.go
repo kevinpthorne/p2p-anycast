@@ -27,14 +27,26 @@ type PolicyJSON struct {
 }
 
 type ServiceCapabilityJSON struct {
-	ServicePattern  string          `json:"service_pattern"`
-	AllowedPolicies []string        `json:"allowed_policies"`
-	AllowedPorts    []PortRangeJSON `json:"allowed_ports"`
+	ServicePattern     string          `json:"service_pattern"`
+	AllowedPolicies    []string        `json:"allowed_policies"`
+	AllowedPorts       []PortRangeJSON `json:"allowed_ports"`
+	AllowedSniPatterns []string        `json:"allowed_sni_patterns"`
 }
 
 type PortRangeJSON struct {
 	Start uint32 `json:"start"`
 	End   uint32 `json:"end"`
+}
+
+func resolveCAPassphrase(passphraseFile string) (string, error) {
+	if passphraseFile != "" {
+		data, err := os.ReadFile(passphraseFile)
+		if err != nil {
+			return "", fmt.Errorf("reading passphrase file %q: %w", passphraseFile, err)
+		}
+		return strings.TrimRight(string(data), "\r\n"), nil
+	}
+	return os.Getenv("ANYCAST_CA_PASSPHRASE"), nil
 }
 
 func main() {
@@ -69,7 +81,14 @@ func printUsage() {
 func cmdInit(args []string) {
 	fs := flag.NewFlagSet("init", flag.ExitOnError)
 	outDir := fs.String("out-dir", ".", "Directory to write ca.priv and ca.pub")
+	passphraseFile := fs.String("passphrase-file", "", "Optional file containing passphrase to encrypt ca.priv at rest (or set ANYCAST_CA_PASSPHRASE)")
 	_ = fs.Parse(args)
+
+	passphrase, err := resolveCAPassphrase(*passphraseFile)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error loading CA passphrase: %v\n", err)
+		os.Exit(1)
+	}
 
 	caPub, caPriv, err := mldsa.GenerateKey()
 	if err != nil {
@@ -80,7 +99,17 @@ func cmdInit(args []string) {
 	privPath := filepath.Join(*outDir, "ca.priv")
 	pubPath := filepath.Join(*outDir, "ca.pub")
 
-	privPEM := mldsa.EncodePrivateKeyToPEM(caPriv)
+	var privPEM []byte
+	if passphrase != "" {
+		privPEM, err = mldsa.EncodeEncryptedPrivateKeyToPEM(caPriv, passphrase)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error encrypting ca.priv: %v\n", err)
+			os.Exit(1)
+		}
+	} else {
+		fmt.Fprintf(os.Stderr, "WARNING: Writing unencrypted ca.priv; set --passphrase-file or ANYCAST_CA_PASSPHRASE to encrypt at rest\n")
+		privPEM = mldsa.EncodePrivateKeyToPEM(caPriv)
+	}
 	pubPEM := mldsa.EncodePublicKeyToPEM(caPub)
 
 	if err := os.WriteFile(privPath, privPEM, 0600); err != nil {
@@ -103,10 +132,17 @@ func cmdSign(args []string) {
 	fs := flag.NewFlagSet("sign", flag.ExitOnError)
 	caPrivPath := fs.String("ca-priv", "ca.priv", "Path to ca.priv")
 	caPubPath := fs.String("ca-pub", "ca.pub", "Path to ca.pub")
+	passphraseFile := fs.String("passphrase-file", "", "Optional file containing passphrase for encrypted ca.priv (or set ANYCAST_CA_PASSPHRASE)")
 	policyPath := fs.String("policy", "policy.json", "Path to policy JSON file")
 	outFile := fs.String("out", "manifest.pb", "Path to output manifest file")
 	format := fs.String("format", "b64", "Output format: b64 (base64 text, default) or pb (raw binary)")
 	_ = fs.Parse(args)
+
+	passphrase, err := resolveCAPassphrase(*passphraseFile)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error loading CA passphrase: %v\n", err)
+		os.Exit(1)
+	}
 
 	// Load CA Private Key
 	privBytes, err := os.ReadFile(*caPrivPath)
@@ -114,7 +150,7 @@ func cmdSign(args []string) {
 		fmt.Fprintf(os.Stderr, "Error reading ca.priv: %v\n", err)
 		os.Exit(1)
 	}
-	caPriv, err := mldsa.DecodePrivateKeyFromPEM(privBytes)
+	caPriv, err := mldsa.DecodePrivateKeyFromPEMWithPassphrase(privBytes, passphrase)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error parsing ca.priv: %v\n", err)
 		os.Exit(1)
@@ -174,7 +210,8 @@ func cmdSign(args []string) {
 
 	for _, capJSON := range pol.Capabilities {
 		cap := &identity.ServiceCapability{
-			ServicePattern: capJSON.ServicePattern,
+			ServicePattern:     capJSON.ServicePattern,
+			AllowedSniPatterns: capJSON.AllowedSniPatterns,
 		}
 		for _, p := range capJSON.AllowedPolicies {
 			switch strings.ToUpper(p) {
@@ -232,15 +269,9 @@ func cmdInspect(args []string) {
 	caPubPath := fs.String("ca-pub", "", "Optional path to trusted ca.pub to verify signature")
 	_ = fs.Parse(args)
 
-	manifestData, err := os.ReadFile(*manifestPath)
+	signedManifest, err := manifest.LoadManifestFile(*manifestPath)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error reading manifest file: %v\n", err)
-		os.Exit(1)
-	}
-
-	var signedManifest identity.SignedCapabilityManifest
-	if err := proto.Unmarshal(manifestData, &signedManifest); err != nil {
-		fmt.Fprintf(os.Stderr, "Error unmarshaling manifest: %v\n", err)
+		fmt.Fprintf(os.Stderr, "Error loading manifest file: %v\n", err)
 		os.Exit(1)
 	}
 
@@ -264,6 +295,9 @@ func cmdInspect(args []string) {
 	for i, cap := range claims.Capabilities {
 		fmt.Printf("  [%d] Service Pattern: %q\n", i+1, cap.ServicePattern)
 		fmt.Printf("      Policies:         %v\n", cap.AllowedPolicies)
+		if len(cap.AllowedSniPatterns) > 0 {
+			fmt.Printf("      SNI Patterns:     %v\n", cap.AllowedSniPatterns)
+		}
 		for _, pr := range cap.AllowedPorts {
 			fmt.Printf("      Port Range:       %d - %d\n", pr.Start, pr.End)
 		}
@@ -281,7 +315,7 @@ func cmdInspect(args []string) {
 			os.Exit(1)
 		}
 
-		verifiedClaims, err := manifest.VerifyManifest(&signedManifest, caPub)
+		verifiedClaims, err := manifest.VerifyManifest(signedManifest, caPub)
 		if err != nil {
 			fmt.Printf("\n[SIGNATURE VERIFICATION FAILED]: %v\n", err)
 			os.Exit(1)

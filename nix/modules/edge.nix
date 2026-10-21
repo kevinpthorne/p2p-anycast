@@ -255,8 +255,12 @@ let
             AmbientCapabilities = [ "CAP_NET_BIND_SERVICE" ] ++ lib.optional cfg.dynamicFirewall.enable "CAP_NET_ADMIN";
             CapabilityBoundingSet = [ "CAP_NET_BIND_SERVICE" ] ++ lib.optional cfg.dynamicFirewall.enable "CAP_NET_ADMIN";
             ProtectSystem = "strict";
-            ProtectHome = "read-only";
+            ProtectHome = true;
             PrivateTmp = true;
+            ProtectKernelTunables = true;
+            ProtectControlGroups = true;
+            RestrictSUIDSGID = true;
+            LockPersonality = true;
           };
         };
       };

@@ -1,12 +1,23 @@
 package keystore
 
 import (
+	"crypto/aes"
+	"crypto/cipher"
 	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/hmac"
+	"crypto/rand"
+	"crypto/sha256"
+	"crypto/subtle"
 	"crypto/x509"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"io"
+	"log"
+	"math/big"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -23,6 +34,20 @@ const (
 	TierTPM2          KeystoreTier = "TPM2.0"
 	TierSecureEnclave KeystoreTier = "AppleSecureEnclave"
 	TierFilesystem    KeystoreTier = "Filesystem"
+
+	// EncryptedKeyPEMType is the PEM header type for AES-256-GCM encrypted node identity keys.
+	EncryptedKeyPEMType = "ENCRYPTED ANYCAST KEY"
+
+	pbkdf2Iterations = 210000
+	pbkdf2SaltSize   = 16
+	gcmNonceSize     = 12
+	aesKeySize       = 32
+	envelopeVersion  = 0x01
+)
+
+var (
+	ErrPassphraseRequired = errors.New("encrypted key requires a passphrase (set Options.Passphrase, ANYCAST_KEY_PASSPHRASE, or systemd key.passphrase credential)")
+	ErrDecryptionFailed   = errors.New("failed to decrypt key: invalid passphrase or corrupted ciphertext")
 )
 
 // IdentityKey encapsulates a node's cryptographic identity.
@@ -55,6 +80,165 @@ type Options struct {
 	KeyFilePath string       // File path or inline private key string (protobuf base64 or PEM)
 	AllowCreate bool         // If true and KeyFilePath does not exist, generate and write a new key
 	ForceTier   KeystoreTier // If set, only attempt this tier (useful for testing)
+	Passphrase  string       // Optional passphrase for AES-256-GCM encryption at rest
+}
+
+// resolvePassphrase resolves the key encryption passphrase from explicit Options,
+// environment variable ANYCAST_KEY_PASSPHRASE, or systemd $CREDENTIALS_DIRECTORY/key.passphrase.
+func resolvePassphrase(explicit string) string {
+	if explicit != "" {
+		return explicit
+	}
+	if env := os.Getenv("ANYCAST_KEY_PASSPHRASE"); env != "" {
+		return env
+	}
+	if credDir := os.Getenv("CREDENTIALS_DIRECTORY"); credDir != "" {
+		if data, err := os.ReadFile(filepath.Join(credDir, "key.passphrase")); err == nil {
+			return strings.TrimRight(string(data), "\r\n")
+		}
+	}
+	return ""
+}
+
+// DeriveKeyPBKDF2 derives a keyLen-byte key from a passphrase and salt using PBKDF2-HMAC-SHA256 (RFC 8018).
+func DeriveKeyPBKDF2(passphrase, salt []byte, iterations, keyLen int) []byte {
+	prf := func(key, data []byte) []byte {
+		mac := hmac.New(sha256.New, key)
+		mac.Write(data)
+		return mac.Sum(nil)
+	}
+	hashLen := sha256.Size
+	numBlocks := (keyLen + hashLen - 1) / hashLen
+	var dk []byte
+	var blockBuf [4]byte
+
+	for block := 1; block <= numBlocks; block++ {
+		binary.BigEndian.PutUint32(blockBuf[:], uint32(block))
+		in := make([]byte, len(salt)+4)
+		copy(in, salt)
+		copy(in[len(salt):], blockBuf[:])
+
+		u := prf(passphrase, in)
+		t := make([]byte, len(u))
+		copy(t, u)
+
+		for i := 2; i <= iterations; i++ {
+			u = prf(passphrase, u)
+			subtle.XORBytes(t, t, u)
+		}
+		dk = append(dk, t...)
+	}
+	return dk[:keyLen]
+}
+
+// EncryptBytesWithPassphrase encrypts arbitrary key material with PBKDF2-HMAC-SHA256 + AES-256-GCM
+// and encodes the envelope as a PEM block with the specified pemType.
+func EncryptBytesWithPassphrase(plaintext []byte, passphrase string, pemType string) ([]byte, error) {
+	if len(plaintext) == 0 {
+		return nil, errors.New("cannot encrypt empty key material")
+	}
+	if passphrase == "" {
+		return nil, ErrPassphraseRequired
+	}
+
+	salt := make([]byte, pbkdf2SaltSize)
+	if _, err := io.ReadFull(rand.Reader, salt); err != nil {
+		return nil, fmt.Errorf("generating PBKDF2 salt: %w", err)
+	}
+
+	nonce := make([]byte, gcmNonceSize)
+	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
+		return nil, fmt.Errorf("generating AES-GCM nonce: %w", err)
+	}
+
+	kek := DeriveKeyPBKDF2([]byte(passphrase), salt, pbkdf2Iterations, aesKeySize)
+	defer func() {
+		for i := range kek {
+			kek[i] = 0
+		}
+	}()
+
+	block, err := aes.NewCipher(kek)
+	if err != nil {
+		return nil, fmt.Errorf("initializing AES-256 cipher: %w", err)
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, fmt.Errorf("initializing AES-256-GCM: %w", err)
+	}
+
+	ciphertext := gcm.Seal(nil, nonce, plaintext, []byte(pemType))
+
+	envelope := make([]byte, 1+pbkdf2SaltSize+gcmNonceSize+len(ciphertext))
+	envelope[0] = envelopeVersion
+	copy(envelope[1:1+pbkdf2SaltSize], salt)
+	copy(envelope[1+pbkdf2SaltSize:1+pbkdf2SaltSize+gcmNonceSize], nonce)
+	copy(envelope[1+pbkdf2SaltSize+gcmNonceSize:], ciphertext)
+
+	pemBlock := &pem.Block{
+		Type: pemType,
+		Headers: map[string]string{
+			"KDF":    "PBKDF2-HMAC-SHA256",
+			"Cipher": "AES-256-GCM",
+		},
+		Bytes: envelope,
+	}
+	return pem.EncodeToMemory(pemBlock), nil
+}
+
+// DecryptBytesWithPassphrase decodes a PEM block of expectedPEMType and decrypts its AES-256-GCM payload.
+func DecryptBytesWithPassphrase(pemData []byte, passphrase string, expectedPEMType string) ([]byte, error) {
+	block, _ := pem.Decode(pemData)
+	if block == nil || block.Type != expectedPEMType {
+		return nil, fmt.Errorf("invalid PEM block: expected %q", expectedPEMType)
+	}
+	if passphrase == "" {
+		return nil, ErrPassphraseRequired
+	}
+
+	minLen := 1 + pbkdf2SaltSize + gcmNonceSize + 16
+	if len(block.Bytes) < minLen {
+		return nil, ErrDecryptionFailed
+	}
+	if block.Bytes[0] != envelopeVersion {
+		return nil, fmt.Errorf("unsupported encrypted key envelope version: 0x%02x", block.Bytes[0])
+	}
+
+	salt := block.Bytes[1 : 1+pbkdf2SaltSize]
+	nonce := block.Bytes[1+pbkdf2SaltSize : 1+pbkdf2SaltSize+gcmNonceSize]
+	ciphertext := block.Bytes[1+pbkdf2SaltSize+gcmNonceSize:]
+
+	kek := DeriveKeyPBKDF2([]byte(passphrase), salt, pbkdf2Iterations, aesKeySize)
+	defer func() {
+		for i := range kek {
+			kek[i] = 0
+		}
+	}()
+
+	aesBlock, err := aes.NewCipher(kek)
+	if err != nil {
+		return nil, fmt.Errorf("initializing AES-256 cipher: %w", err)
+	}
+	gcm, err := cipher.NewGCM(aesBlock)
+	if err != nil {
+		return nil, fmt.Errorf("initializing AES-256-GCM: %w", err)
+	}
+
+	plaintext, err := gcm.Open(nil, nonce, ciphertext, []byte(expectedPEMType))
+	if err != nil {
+		return nil, ErrDecryptionFailed
+	}
+	return plaintext, nil
+}
+
+// EncryptKeyData encrypts raw identity key bytes using PBKDF2-HMAC-SHA256 and AES-256-GCM.
+func EncryptKeyData(plaintext []byte, passphrase string) ([]byte, error) {
+	return EncryptBytesWithPassphrase(plaintext, passphrase, EncryptedKeyPEMType)
+}
+
+// DecryptKeyData decrypts an ENCRYPTED ANYCAST KEY PEM block using the provided passphrase.
+func DecryptKeyData(pemData []byte, passphrase string) ([]byte, error) {
+	return DecryptBytesWithPassphrase(pemData, passphrase, EncryptedKeyPEMType)
 }
 
 // LoadOrGenerateIdentity loads or generates a node identity following the anchor waterfall:
@@ -66,9 +250,12 @@ type Options struct {
 // If ForceTier is specified, only that specific tier is attempted.
 // If KeyFilePath contains inline key data, it loads directly from the inline data.
 func LoadOrGenerateIdentity(opts Options) (*IdentityKey, error) {
+	passphrase := resolvePassphrase(opts.Passphrase)
+
 	// If an inline key is provided directly in KeyFilePath, load it immediately as Filesystem tier.
 	if opts.KeyFilePath != "" && isInlineKey(opts.KeyFilePath) {
-		priv, err := tryFilesystem(opts.KeyFilePath, false)
+		log.Printf("[Keystore] WARNING: Using inline filesystem-tier identity key; hardware keystore (TPM 2.0 / Secure Enclave) is recommended for production")
+		priv, err := tryFilesystem(opts.KeyFilePath, false, passphrase)
 		if err != nil {
 			return nil, fmt.Errorf("failed to load inline identity key: %w", err)
 		}
@@ -77,11 +264,12 @@ func LoadOrGenerateIdentity(opts Options) (*IdentityKey, error) {
 
 	// If TierFilesystem is explicitly forced, bypass hardware tiers and go straight to filesystem.
 	if opts.ForceTier == TierFilesystem {
+		log.Printf("[Keystore] WARNING: TierFilesystem explicitly forced; bypassing hardware keystore (TPM 2.0 / Secure Enclave)")
 		keyPath := opts.KeyFilePath
 		if keyPath == "" {
 			keyPath = "identity.key"
 		}
-		priv, err := tryFilesystem(keyPath, opts.AllowCreate)
+		priv, err := tryFilesystem(keyPath, opts.AllowCreate, passphrase)
 		if err != nil {
 			return nil, fmt.Errorf("failed to load identity key (%s): %w", keyPath, err)
 		}
@@ -107,9 +295,11 @@ func LoadOrGenerateIdentity(opts Options) (*IdentityKey, error) {
 	}
 
 	// 3. Tier 2: Filesystem fallback (only reached if TPM and SE failed or are unavailable)
+	log.Printf("[Keystore] WARNING: Hardware keystore (TPM 2.0 / Secure Enclave) unavailable; falling back to filesystem-based identity key")
+
 	// Check ANYCAST_IDENTITY_KEY env var if set
 	if envKey := strings.TrimSpace(os.Getenv("ANYCAST_IDENTITY_KEY")); envKey != "" {
-		priv, err := tryFilesystem(envKey, opts.AllowCreate)
+		priv, err := tryFilesystem(envKey, opts.AllowCreate, passphrase)
 		if err != nil {
 			return nil, fmt.Errorf("failed to load identity key from ANYCAST_IDENTITY_KEY: %w", err)
 		}
@@ -121,7 +311,7 @@ func LoadOrGenerateIdentity(opts Options) (*IdentityKey, error) {
 	if keyPath == "" {
 		keyPath = "identity.key"
 	}
-	priv, err := tryFilesystem(keyPath, opts.AllowCreate)
+	priv, err := tryFilesystem(keyPath, opts.AllowCreate, passphrase)
 	if err != nil {
 		return nil, fmt.Errorf("no persistent identity key found (TPM/SE unavailable, and %s could not be loaded): %w", keyPath, err)
 	}
@@ -166,17 +356,87 @@ func buildIdentityFromECDSA(key *ecdsa.PrivateKey, tier KeystoreTier) (*Identity
 	return buildIdentity(p2pPriv, tier)
 }
 
-// tryTPM2 attempts to probe and connect to a TPM 2.0 device on Linux or Windows.
+// tryTPM2 probes a TPM 2.0 device (/dev/tpmrm0 or /dev/tpm0) and deterministically derives
+// a hardware-anchored P-256 identity key from the TPM Owner Hierarchy primary seed using
+// CreatePrimary + ECDHZGen.
 func tryTPM2() (*ecdsa.PrivateKey, error) {
 	devices := []string{"/dev/tpmrm0", "/dev/tpm0"}
+	var lastErr error
 	for _, dev := range devices {
 		rwc, err := tpm2.OpenTPM(dev)
-		if err == nil {
-			defer rwc.Close()
-			return nil, errors.New("TPM device found but SRK initialization not configured")
+		if err != nil {
+			lastErr = err
+			continue
 		}
+		key, kErr := deriveIdentityFromTPM(rwc)
+		_ = rwc.Close()
+		if kErr == nil && key != nil {
+			return key, nil
+		}
+		lastErr = kErr
+	}
+	if lastErr != nil {
+		return nil, fmt.Errorf("no TPM 2.0 device usable: %w", lastErr)
 	}
 	return nil, errors.New("no TPM 2.0 device accessible")
+}
+
+// deriveIdentityFromTPM creates a deterministic ECC P-256 primary key under the TPM Owner
+// hierarchy and performs an internal ECDH scalar multiplication against a fixed generator point
+// to derive a deterministic P-256 identity key tied to the TPM's non-exportable primary seed.
+func deriveIdentityFromTPM(rw io.ReadWriter) (*ecdsa.PrivateKey, error) {
+	uniqueSeed := sha256.Sum256([]byte("p2p-anycast:tpm2:primary-template:v1"))
+	primaryTemplate := tpm2.Public{
+		Type:       tpm2.AlgECC,
+		NameAlg:    tpm2.AlgSHA256,
+		Attributes: tpm2.FlagDecrypt | tpm2.FlagFixedTPM | tpm2.FlagFixedParent | tpm2.FlagSensitiveDataOrigin | tpm2.FlagUserWithAuth,
+		ECCParameters: &tpm2.ECCParams{
+			CurveID: tpm2.CurveNISTP256,
+			Point: tpm2.ECPoint{
+				XRaw: uniqueSeed[:],
+				YRaw: uniqueSeed[:],
+			},
+		},
+	}
+
+	handle, _, err := tpm2.CreatePrimary(rw, tpm2.HandleOwner, tpm2.PCRSelection{}, "", "", primaryTemplate)
+	if err != nil {
+		return nil, fmt.Errorf("TPM2_CreatePrimary failed: %w", err)
+	}
+	defer func() {
+		_ = tpm2.FlushContext(rw, handle)
+	}()
+
+	curve := elliptic.P256()
+	gx, gy := curve.ScalarBaseMult([]byte{0x02})
+	zPoint, err := tpm2.ECDHZGen(rw, handle, "", tpm2.ECPoint{
+		XRaw: gx.Bytes(),
+		YRaw: gy.Bytes(),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("TPM2_ECDH_ZGen failed: %w", err)
+	}
+
+	mac := hmac.New(sha256.New, []byte("p2p-anycast:tpm2:identity:v1"))
+	mac.Write(zPoint.XRaw)
+	mac.Write(zPoint.YRaw)
+	digest := mac.Sum(nil)
+
+	order := curve.Params().N
+	one := big.NewInt(1)
+	d := new(big.Int).SetBytes(digest)
+	d.Mod(d, new(big.Int).Sub(order, one))
+	d.Add(d, one)
+
+	pubX, pubY := curve.ScalarBaseMult(d.Bytes())
+	return &ecdsa.PrivateKey{
+		PublicKey: ecdsa.PublicKey{
+			Curve: curve,
+			X:     pubX,
+			Y:     pubY,
+		},
+		D: d,
+	}, nil
 }
 
 // trySecureEnclave attempts to probe Apple Secure Enclave on Darwin ARM64.
@@ -202,10 +462,32 @@ func isInlineKey(s string) bool {
 }
 
 // parsePrivateKey parses key bytes supporting:
+// 0. Encrypted PEM format (-----BEGIN ENCRYPTED ANYCAST KEY-----)
 // 1. libp2p protobuf format (libp2p default)
 // 2. Base64-encoded libp2p protobuf format
 // 3. SEC1 or PKCS#8 PEM format (backwards compatibility)
-func parsePrivateKey(data []byte) (ic.PrivKey, error) {
+func parsePrivateKey(data []byte, passphrase string) (ic.PrivKey, error) {
+	trimmedStr := strings.TrimSpace(string(data))
+
+	// 0. Check for AES-256-GCM encrypted key at rest
+	if strings.Contains(trimmedStr, "-----BEGIN "+EncryptedKeyPEMType+"-----") {
+		decrypted, err := DecryptKeyData(data, passphrase)
+		if err != nil {
+			return nil, err
+		}
+		defer func() {
+			for i := range decrypted {
+				decrypted[i] = 0
+			}
+		}()
+		return parseUnencryptedPrivateKey(decrypted)
+	}
+
+	log.Printf("[Keystore] WARNING: Identity key is stored unencrypted on filesystem; set ANYCAST_KEY_PASSPHRASE or Options.Passphrase to enable AES-256-GCM encryption at rest")
+	return parseUnencryptedPrivateKey(data)
+}
+
+func parseUnencryptedPrivateKey(data []byte) (ic.PrivKey, error) {
 	// 1. Try standard libp2p protobuf binary format
 	if priv, err := ic.UnmarshalPrivateKey(data); err == nil {
 		return priv, nil
@@ -232,12 +514,12 @@ func parsePrivateKey(data []byte) (ic.PrivKey, error) {
 		return p2pPriv, nil
 	}
 
-	return nil, errors.New("unrecognized identity key format (expected libp2p protobuf, base64, or PEM)")
+	return nil, errors.New("unrecognized identity key format (expected encrypted PEM, libp2p protobuf, base64, or ECDSA PEM)")
 }
 
 // tryFilesystem loads an existing key (from file or inline string), or generates a new
 // libp2p Ed25519 key if allowed.
-func tryFilesystem(pathOrData string, allowCreate bool) (ic.PrivKey, error) {
+func tryFilesystem(pathOrData string, allowCreate bool, passphrase string) (ic.PrivKey, error) {
 	trimmed := strings.TrimSpace(pathOrData)
 	if trimmed == "" {
 		return nil, errors.New("empty identity key path or data")
@@ -245,13 +527,13 @@ func tryFilesystem(pathOrData string, allowCreate bool) (ic.PrivKey, error) {
 
 	// 1. Check if the string itself is inline key data
 	if isInlineKey(trimmed) {
-		return parsePrivateKey([]byte(trimmed))
+		return parsePrivateKey([]byte(trimmed), passphrase)
 	}
 
 	// 2. Read from filesystem path
 	data, err := os.ReadFile(trimmed)
 	if err == nil {
-		return parsePrivateKey(data)
+		return parsePrivateKey(data, passphrase)
 	}
 
 	// If read failed, check if systemd passed the file via LoadCredential ($CREDENTIALS_DIRECTORY)
@@ -262,7 +544,7 @@ func tryFilesystem(pathOrData string, allowCreate bool) (ic.PrivKey, error) {
 		}
 		for _, c := range candidates {
 			if credData, cErr := os.ReadFile(c); cErr == nil {
-				return parsePrivateKey(credData)
+				return parsePrivateKey(credData, passphrase)
 			}
 		}
 	}
@@ -275,7 +557,7 @@ func tryFilesystem(pathOrData string, allowCreate bool) (ic.PrivKey, error) {
 		return nil, fmt.Errorf("reading key file %q: %w", trimmed, err)
 	}
 
-	// 3. Generate and save new key using libp2p default (Ed25519) and libp2p standard protobuf wire format
+	// 3. Generate and save new key using libp2p default (Ed25519)
 	priv, _, err := ic.GenerateKeyPair(ic.Ed25519, 0)
 	if err != nil {
 		return nil, fmt.Errorf("generating libp2p Ed25519 key: %w", err)
@@ -286,13 +568,24 @@ func tryFilesystem(pathOrData string, allowCreate bool) (ic.PrivKey, error) {
 		return nil, fmt.Errorf("marshaling libp2p private key: %w", err)
 	}
 
+	outBytes := keyBytes
+	if passphrase != "" {
+		encrypted, encErr := EncryptKeyData(keyBytes, passphrase)
+		if encErr != nil {
+			return nil, fmt.Errorf("encrypting identity key at rest: %w", encErr)
+		}
+		outBytes = encrypted
+	} else {
+		log.Printf("[Keystore] WARNING: Generating unencrypted identity key on disk at %q; set ANYCAST_KEY_PASSPHRASE or Options.Passphrase for AES-256-GCM encryption at rest", trimmed)
+	}
+
 	if dir := filepath.Dir(trimmed); dir != "" && dir != "." {
 		if err := os.MkdirAll(dir, 0700); err != nil {
 			return nil, fmt.Errorf("creating directory %q: %w", dir, err)
 		}
 	}
 
-	if err := os.WriteFile(trimmed, keyBytes, 0600); err != nil {
+	if err := os.WriteFile(trimmed, outBytes, 0600); err != nil {
 		return nil, fmt.Errorf("writing key file %q: %w", trimmed, err)
 	}
 
@@ -322,3 +615,4 @@ func parsePrivateKeyPEM(data []byte) (*ecdsa.PrivateKey, error) {
 
 	return nil, fmt.Errorf("failed to parse ECDSA private key (not SEC1 or PKCS#8): %w", err)
 }
+

@@ -172,12 +172,13 @@ func (x *PortRange) GetEnd() uint32 {
 }
 
 type ServiceCapability struct {
-	state           protoimpl.MessageState `protogen:"open.v1"`
-	ServicePattern  string                 `protobuf:"bytes,1,opt,name=service_pattern,json=servicePattern,proto3" json:"service_pattern,omitempty"` // Wildcard glob: "pbx-*", "mc-smp"
-	AllowedPolicies []AuthorizedPolicy     `protobuf:"varint,2,rep,packed,name=allowed_policies,json=allowedPolicies,proto3,enum=p2panycast.identity.v1.AuthorizedPolicy" json:"allowed_policies,omitempty"`
-	AllowedPorts    []*PortRange           `protobuf:"bytes,3,rep,name=allowed_ports,json=allowedPorts,proto3" json:"allowed_ports,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	state              protoimpl.MessageState `protogen:"open.v1"`
+	ServicePattern     string                 `protobuf:"bytes,1,opt,name=service_pattern,json=servicePattern,proto3" json:"service_pattern,omitempty"` // Wildcard glob: "pbx-*", "mc-smp"
+	AllowedPolicies    []AuthorizedPolicy     `protobuf:"varint,2,rep,packed,name=allowed_policies,json=allowedPolicies,proto3,enum=p2panycast.identity.v1.AuthorizedPolicy" json:"allowed_policies,omitempty"`
+	AllowedPorts       []*PortRange           `protobuf:"bytes,3,rep,name=allowed_ports,json=allowedPorts,proto3" json:"allowed_ports,omitempty"`
+	AllowedSniPatterns []string               `protobuf:"bytes,4,rep,name=allowed_sni_patterns,json=allowedSniPatterns,proto3" json:"allowed_sni_patterns,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
 }
 
 func (x *ServiceCapability) Reset() {
@@ -227,6 +228,13 @@ func (x *ServiceCapability) GetAllowedPolicies() []AuthorizedPolicy {
 func (x *ServiceCapability) GetAllowedPorts() []*PortRange {
 	if x != nil {
 		return x.AllowedPorts
+	}
+	return nil
+}
+
+func (x *ServiceCapability) GetAllowedSniPatterns() []string {
+	if x != nil {
+		return x.AllowedSniPatterns
 	}
 	return nil
 }
@@ -396,6 +404,9 @@ func (x *SignedCapabilityManifest) GetCaKeyId() []byte {
 type AuthHello struct {
 	state         protoimpl.MessageState    `protogen:"open.v1"`
 	Manifest      *SignedCapabilityManifest `protobuf:"bytes,1,opt,name=manifest,proto3" json:"manifest,omitempty"`
+	Nonce         []byte                    `protobuf:"bytes,2,opt,name=nonce,proto3" json:"nonce,omitempty"`
+	Timestamp     int64                     `protobuf:"varint,3,opt,name=timestamp,proto3" json:"timestamp,omitempty"`
+	Signature     []byte                    `protobuf:"bytes,4,opt,name=signature,proto3" json:"signature,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -437,10 +448,34 @@ func (x *AuthHello) GetManifest() *SignedCapabilityManifest {
 	return nil
 }
 
+func (x *AuthHello) GetNonce() []byte {
+	if x != nil {
+		return x.Nonce
+	}
+	return nil
+}
+
+func (x *AuthHello) GetTimestamp() int64 {
+	if x != nil {
+		return x.Timestamp
+	}
+	return 0
+}
+
+func (x *AuthHello) GetSignature() []byte {
+	if x != nil {
+		return x.Signature
+	}
+	return nil
+}
+
 // AuthResponse is sent back by the receiving node (Edge) to complete mutual auth.
 type AuthResponse struct {
 	state         protoimpl.MessageState    `protogen:"open.v1"`
 	Manifest      *SignedCapabilityManifest `protobuf:"bytes,1,opt,name=manifest,proto3" json:"manifest,omitempty"`
+	Nonce         []byte                    `protobuf:"bytes,2,opt,name=nonce,proto3" json:"nonce,omitempty"`
+	Timestamp     int64                     `protobuf:"varint,3,opt,name=timestamp,proto3" json:"timestamp,omitempty"`
+	Signature     []byte                    `protobuf:"bytes,4,opt,name=signature,proto3" json:"signature,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -482,45 +517,30 @@ func (x *AuthResponse) GetManifest() *SignedCapabilityManifest {
 	return nil
 }
 
+func (x *AuthResponse) GetNonce() []byte {
+	if x != nil {
+		return x.Nonce
+	}
+	return nil
+}
+
+func (x *AuthResponse) GetTimestamp() int64 {
+	if x != nil {
+		return x.Timestamp
+	}
+	return 0
+}
+
+func (x *AuthResponse) GetSignature() []byte {
+	if x != nil {
+		return x.Signature
+	}
+	return nil
+}
+
 var File_identity_proto protoreflect.FileDescriptor
 
-const file_identity_proto_rawDesc = "" +
-	"\n" +
-	"\x0eidentity.proto\x12\x16p2panycast.identity.v1\"3\n" +
-	"\tPortRange\x12\x14\n" +
-	"\x05start\x18\x01 \x01(\rR\x05start\x12\x10\n" +
-	"\x03end\x18\x02 \x01(\rR\x03end\"\xd9\x01\n" +
-	"\x11ServiceCapability\x12'\n" +
-	"\x0fservice_pattern\x18\x01 \x01(\tR\x0eservicePattern\x12S\n" +
-	"\x10allowed_policies\x18\x02 \x03(\x0e2(.p2panycast.identity.v1.AuthorizedPolicyR\x0fallowedPolicies\x12F\n" +
-	"\rallowed_ports\x18\x03 \x03(\v2!.p2panycast.identity.v1.PortRangeR\fallowedPorts\"\xd8\x02\n" +
-	"\x0eIdentityClaims\x12#\n" +
-	"\rserial_number\x18\x01 \x01(\x04R\fserialNumber\x12\x1b\n" +
-	"\tissuer_id\x18\x02 \x01(\tR\bissuerId\x12\x1d\n" +
-	"\n" +
-	"subject_id\x18\x03 \x01(\tR\tsubjectId\x124\n" +
-	"\x04role\x18\x04 \x01(\x0e2 .p2panycast.identity.v1.NodeRoleR\x04role\x12$\n" +
-	"\x0elibp2p_peer_id\x18\x06 \x01(\tR\flibp2pPeerId\x12\x1d\n" +
-	"\n" +
-	"not_before\x18\a \x01(\x03R\tnotBefore\x12\x1b\n" +
-	"\tnot_after\x18\b \x01(\x03R\bnotAfter\x12M\n" +
-	"\fcapabilities\x18\t \x03(\v2).p2panycast.identity.v1.ServiceCapabilityR\fcapabilities\"\x80\x01\n" +
-	"\x18SignedCapabilityManifest\x12%\n" +
-	"\x0eclaims_payload\x18\x01 \x01(\fR\rclaimsPayload\x12!\n" +
-	"\fca_signature\x18\x02 \x01(\fR\vcaSignature\x12\x1a\n" +
-	"\tca_key_id\x18\x03 \x01(\fR\acaKeyId\"Y\n" +
-	"\tAuthHello\x12L\n" +
-	"\bmanifest\x18\x01 \x01(\v20.p2panycast.identity.v1.SignedCapabilityManifestR\bmanifest\"\\\n" +
-	"\fAuthResponse\x12L\n" +
-	"\bmanifest\x18\x01 \x01(\v20.p2panycast.identity.v1.SignedCapabilityManifestR\bmanifest*B\n" +
-	"\bNodeRole\x12\x14\n" +
-	"\x10ROLE_UNSPECIFIED\x10\x00\x12\x0f\n" +
-	"\vEDGE_ROUTER\x10\x01\x12\x0f\n" +
-	"\vORIGIN_NODE\x10\x02*f\n" +
-	"\x10AuthorizedPolicy\x12\x18\n" +
-	"\x14POLICY_CLUSTERED_RTT\x10\x00\x12\x1b\n" +
-	"\x17POLICY_FAILOVER_STANDBY\x10\x01\x12\x1b\n" +
-	"\x17POLICY_STRICT_SINGLETON\x10\x02B)Z'p2p-anycast/pkg/proto/identity;identityb\x06proto3"
+const file_identity_proto_rawDesc = "\n\x0eidentity.proto\x12\x16p2panycast.identity.v1\"3\n\tPortRange\x12\x14\n\x05start\x18\x01 \x01(\rR\x05start\x12\x10\n\x03end\x18\x02 \x01(\rR\x03end\"\x8b\x02\n\x11ServiceCapability\x12'\n\x0fservice_pattern\x18\x01 \x01(\tR\x0eservicePattern\x12S\n\x10allowed_policies\x18\x02 \x03(\x0e2(.p2panycast.identity.v1.AuthorizedPolicyR\x0fallowedPolicies\x12F\n\rallowed_ports\x18\x03 \x03(\v2!.p2panycast.identity.v1.PortRangeR\fallowedPorts\x120\n\x14allowed_sni_patterns\x18\x04 \x03(\tR\x12allowedSniPatterns\"\xd8\x02\n\x0eIdentityClaims\x12#\n\rserial_number\x18\x01 \x01(\x04R\fserialNumber\x12\x1b\n\tissuer_id\x18\x02 \x01(\tR\bissuerId\x12\x1d\n\nsubject_id\x18\x03 \x01(\tR\tsubjectId\x124\n\x04role\x18\x04 \x01(\x0e2 .p2panycast.identity.v1.NodeRoleR\x04role\x12$\n\x0elibp2p_peer_id\x18\x06 \x01(\tR\flibp2pPeerId\x12\x1d\n\nnot_before\x18\a \x01(\x03R\tnotBefore\x12\x1b\n\tnot_after\x18\b \x01(\x03R\bnotAfter\x12M\n\fcapabilities\x18\t \x03(\v2).p2panycast.identity.v1.ServiceCapabilityR\fcapabilities\"\x80\x01\n\x18SignedCapabilityManifest\x12%\n\x0eclaims_payload\x18\x01 \x01(\fR\rclaimsPayload\x12!\n\fca_signature\x18\x02 \x01(\fR\vcaSignature\x12\x1a\n\tca_key_id\x18\x03 \x01(\fR\acaKeyId\"\xab\x01\n\tAuthHello\x12L\n\bmanifest\x18\x01 \x01(\v20.p2panycast.identity.v1.SignedCapabilityManifestR\bmanifest\x12\x14\n\x05nonce\x18\x02 \x01(\fR\x05nonce\x12\x1c\n\ttimestamp\x18\x03 \x01(\x03R\ttimestamp\x12\x1c\n\tsignature\x18\x04 \x01(\fR\tsignature\"\xae\x01\n\fAuthResponse\x12L\n\bmanifest\x18\x01 \x01(\v20.p2panycast.identity.v1.SignedCapabilityManifestR\bmanifest\x12\x14\n\x05nonce\x18\x02 \x01(\fR\x05nonce\x12\x1c\n\ttimestamp\x18\x03 \x01(\x03R\ttimestamp\x12\x1c\n\tsignature\x18\x04 \x01(\fR\tsignature*B\n\bNodeRole\x12\x14\n\x10ROLE_UNSPECIFIED\x10\x00\x12\x0f\n\vEDGE_ROUTER\x10\x01\x12\x0f\n\vORIGIN_NODE\x10\x02*f\n\x10AuthorizedPolicy\x12\x18\n\x14POLICY_CLUSTERED_RTT\x10\x00\x12\x1b\n\x17POLICY_FAILOVER_STANDBY\x10\x01\x12\x1b\n\x17POLICY_STRICT_SINGLETON\x10\x02B)Z'p2p-anycast/pkg/proto/identity;identityb\x06proto3"
 
 var (
 	file_identity_proto_rawDescOnce sync.Once

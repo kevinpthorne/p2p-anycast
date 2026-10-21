@@ -109,4 +109,22 @@ func TestMutualAuthHandshake(t *testing.T) {
 	if verifiedOriginClaims.SubjectId != "origin-pbx-01" {
 		t.Fatalf("expected origin subject 'origin-pbx-01', got %s", verifiedOriginClaims.SubjectId)
 	}
+
+	// 6. Verify non-repudiation AuthReceipts exist on both Edge and Origin
+	edgeReceipt, ok := edgeAuth.GetReceipt(originHost.ID())
+	if !ok || len(edgeReceipt.PeerSignature) == 0 || len(edgeReceipt.LocalNonce) == 0 {
+		t.Fatal("edge did not store signed non-repudiation AuthReceipt for origin")
+	}
+	originReceipt, ok := originAuth.GetReceipt(edgeHost.ID())
+	if !ok || len(originReceipt.PeerSignature) == 0 || len(originReceipt.LocalNonce) == 0 {
+		t.Fatal("origin did not store signed non-repudiation AuthReceipt for edge")
+	}
+
+	// 7. Verify RevocationList immediately invalidates active session
+	revList := manifest.NewRevocationList()
+	revList.RevokeSerial(originClaims.SerialNumber)
+	edgeAuth.SetRevocationList(revList)
+	if _, ok := edgeAuth.GetSession(originHost.ID()); ok {
+		t.Fatal("expected revoked origin session to be rejected and evicted by GetSession")
+	}
 }
