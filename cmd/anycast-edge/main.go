@@ -22,6 +22,7 @@ import (
 	identity "p2p-anycast/pkg/proto/identity"
 	"p2p-anycast/pkg/transport/auth"
 	p2pquic "p2p-anycast/pkg/transport/quic"
+	"p2p-anycast/pkg/version"
 )
 
 func main() {
@@ -31,7 +32,13 @@ func main() {
 	identityKeyPath := flag.String("identity-key", "identity.key", "Path to hardware/filesystem identity key")
 	printPeerID := flag.Bool("print-peer-id", false, "Print the libp2p Peer ID derived from the identity key and exit")
 	firewallBackend := flag.String("firewall", "auto", "Firewall backend for dynamic port opening (auto, iptables, nftables, none)")
+	printVersion := flag.Bool("version", false, "Print version and exit")
 	flag.Parse()
+
+	if *printVersion {
+		fmt.Printf("anycast-edge %s\n", version.Info())
+		return
+	}
 
 	// 1. Load Keystore Identity (TPM2 -> Secure Enclave -> Filesystem)
 	idKey, err := keystore.LoadOrGenerateIdentity(keystore.Options{
@@ -50,7 +57,7 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	log.Printf("[Edge] Starting MeshCast Edge Router...")
+	log.Printf("[Edge] Starting MeshCast Edge Router %s...", version.Info())
 	log.Printf("[Edge] Loaded identity from %s (Peer ID: %s)", idKey.Tier(), idKey.PeerID())
 
 	// 2. Load Trusted Root CA Public Key (from file, inline PEM string, or ANYCAST_CA_PUB env)

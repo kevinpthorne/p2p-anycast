@@ -28,6 +28,7 @@ import (
 	"p2p-anycast/pkg/pki/mldsa"
 	"p2p-anycast/pkg/transport/auth"
 	p2pquic "p2p-anycast/pkg/transport/quic"
+	"p2p-anycast/pkg/version"
 )
 
 type OriginConfigJSON struct {
@@ -78,7 +79,13 @@ func main() {
 	k8sNamespace := flag.String("k8s-namespace", "", "Kubernetes namespace to discover services from (default: all namespaces)")
 	k8sAnnotationPrefix := flag.String("k8s-annotation-prefix", "", "Custom annotation prefix (default: p2p-anycast.io and anycast.io)")
 	k8sInsecure := flag.Bool("k8s-insecure-skip-tls-verify", false, "Skip TLS verification when connecting to Kubernetes API")
+	printVersion := flag.Bool("version", false, "Print version and exit")
 	flag.Parse()
+
+	if *printVersion {
+		fmt.Printf("anycast-origin %s\n", version.Info())
+		return
+	}
 
 	// 1. Load Origin Identity Key (TPM2 -> Secure Enclave -> Filesystem)
 	idKey, err := keystore.LoadOrGenerateIdentity(keystore.Options{
@@ -97,7 +104,7 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	log.Printf("[Origin] Starting MeshCast Origin Sidecar...")
+	log.Printf("[Origin] Starting MeshCast Origin Sidecar %s...", version.Info())
 	log.Printf("[Origin] Loaded identity from %s (Peer ID: %s)", idKey.Tier(), idKey.PeerID())
 
 	// 2. Load Root CA Public Key (from file, inline PEM string, or ANYCAST_CA_PUB env)

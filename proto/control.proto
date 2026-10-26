@@ -45,4 +45,5 @@ message ServiceRegistration {
   string target_edge_peer_id = 14;// Specific Edge Peer ID this HMAC capability is scoped to
   int64 timestamp = 15;           // Unix timestamp (seconds) when registration was signed
   bytes origin_signature = 16;    // Origin identity key signature over deterministic registration
+  bytes origin_public_key = 17;   // Optional marshaled public key if not extractable from OriginPeerId
 }

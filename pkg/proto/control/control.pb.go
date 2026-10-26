@@ -235,6 +235,7 @@ type ServiceRegistration struct {
 	TargetEdgePeerId     string                 `protobuf:"bytes,14,opt,name=target_edge_peer_id,json=targetEdgePeerId,proto3" json:"target_edge_peer_id,omitempty"`              // Specific Edge Peer ID this HMAC capability is scoped to
 	Timestamp            int64                  `protobuf:"varint,15,opt,name=timestamp,proto3" json:"timestamp,omitempty"`                                                       // Unix timestamp (seconds) when registration was signed
 	OriginSignature      []byte                 `protobuf:"bytes,16,opt,name=origin_signature,json=originSignature,proto3" json:"origin_signature,omitempty"`                     // Origin identity key signature over deterministic registration
+	OriginPublicKey      []byte                 `protobuf:"bytes,17,opt,name=origin_public_key,json=originPublicKey,proto3" json:"origin_public_key,omitempty"`                   // Optional marshaled public key if not extractable from OriginPeerId
 	unknownFields        protoimpl.UnknownFields
 	sizeCache            protoimpl.SizeCache
 }
@@ -381,9 +382,60 @@ func (x *ServiceRegistration) GetOriginSignature() []byte {
 	return nil
 }
 
+func (x *ServiceRegistration) GetOriginPublicKey() []byte {
+	if x != nil {
+		return x.OriginPublicKey
+	}
+	return nil
+}
+
 var File_control_proto protoreflect.FileDescriptor
 
-const file_control_proto_rawDesc = "\n\rcontrol.proto\x12\x15p2panycast.control.v1\"\xeb\x05\n\x13ServiceRegistration\x126\n\x04type\x18\x01 \x01(\x0e2\".p2panycast.control.v1.MessageTypeR\x04type\x12\x1d\n\nbinding_id\x18\x02 \x01(\fR\tbindingId\x12\x1d\n\nservice_id\x18\x03 \x01(\tR\tserviceId\x12$\n\x0eorigin_peer_id\x18\x04 \x01(\tR\foriginPeerId\x12D\n\bprotocol\x18\x05 \x01(\x0e2(.p2panycast.control.v1.TransportProtocolR\bprotocol\x12\x1f\n\vpublic_port\x18\x06 \x01(\rR\npublicPort\x12<\n\x06policy\x18\a \x01(\x0e2$.p2panycast.control.v1.RoutingPolicyR\x06policy\x12!\n\fsni_hostname\x18\b \x01(\tR\vsniHostname\x12,\n\x12lease_duration_sec\x18\t \x01(\rR\x10leaseDurationSec\x12\x1f\n\vlease_epoch\x18\n \x01(\x04R\nleaseEpoch\x122\n\x15enable_proxy_protocol\x18\v \x01(\bR\x13enableProxyProtocol\x124\n\x16origin_hmac_capability\x18\f \x01(\fR\x14originHmacCapability\x12?\n\ndemux_mode\x18\r \x01(\x0e2 .p2panycast.control.v1.DemuxModeR\tdemuxMode\x12-\n\x13target_edge_peer_id\x18\x0e \x01(\tR\x10targetEdgePeerId\x12\x1c\n\ttimestamp\x18\x0f \x01(\x03R\ttimestamp\x12)\n\x10origin_signature\x18\x10 \x01(\fR\x0foriginSignature*P\n\x11TransportProtocol\x12\x18\n\x14PROTOCOL_UNSPECIFIED\x10\x00\x12\a\n\x03TCP\x10\x01\x12\a\n\x03UDP\x10\x02\x12\x0f\n\vTCP_AND_UDP\x10\x03*.\n\tDemuxMode\x12\x0e\n\nDEMUX_PORT\x10\x00\x12\x11\n\rDEMUX_TLS_SNI\x10\x01*N\n\rRoutingPolicy\x12\x11\n\rCLUSTERED_RTT\x10\x00\x12\x14\n\x10FAILOVER_STANDBY\x10\x01\x12\x14\n\x10STRICT_SINGLETON\x10\x02*6\n\vMessageType\x12\f\n\bANNOUNCE\x10\x00\x12\r\n\tHEARTBEAT\x10\x01\x12\n\n\x06REVOKE\x10\x02B'Z%p2p-anycast/pkg/proto/control;controlb\x06proto3"
+const file_control_proto_rawDesc = "" +
+	"\n" +
+	"\rcontrol.proto\x12\x15p2panycast.control.v1\"\x97\x06\n" +
+	"\x13ServiceRegistration\x126\n" +
+	"\x04type\x18\x01 \x01(\x0e2\".p2panycast.control.v1.MessageTypeR\x04type\x12\x1d\n" +
+	"\n" +
+	"binding_id\x18\x02 \x01(\fR\tbindingId\x12\x1d\n" +
+	"\n" +
+	"service_id\x18\x03 \x01(\tR\tserviceId\x12$\n" +
+	"\x0eorigin_peer_id\x18\x04 \x01(\tR\foriginPeerId\x12D\n" +
+	"\bprotocol\x18\x05 \x01(\x0e2(.p2panycast.control.v1.TransportProtocolR\bprotocol\x12\x1f\n" +
+	"\vpublic_port\x18\x06 \x01(\rR\n" +
+	"publicPort\x12<\n" +
+	"\x06policy\x18\a \x01(\x0e2$.p2panycast.control.v1.RoutingPolicyR\x06policy\x12!\n" +
+	"\fsni_hostname\x18\b \x01(\tR\vsniHostname\x12,\n" +
+	"\x12lease_duration_sec\x18\t \x01(\rR\x10leaseDurationSec\x12\x1f\n" +
+	"\vlease_epoch\x18\n" +
+	" \x01(\x04R\n" +
+	"leaseEpoch\x122\n" +
+	"\x15enable_proxy_protocol\x18\v \x01(\bR\x13enableProxyProtocol\x124\n" +
+	"\x16origin_hmac_capability\x18\f \x01(\fR\x14originHmacCapability\x12?\n" +
+	"\n" +
+	"demux_mode\x18\r \x01(\x0e2 .p2panycast.control.v1.DemuxModeR\tdemuxMode\x12-\n" +
+	"\x13target_edge_peer_id\x18\x0e \x01(\tR\x10targetEdgePeerId\x12\x1c\n" +
+	"\ttimestamp\x18\x0f \x01(\x03R\ttimestamp\x12)\n" +
+	"\x10origin_signature\x18\x10 \x01(\fR\x0foriginSignature\x12*\n" +
+	"\x11origin_public_key\x18\x11 \x01(\fR\x0foriginPublicKey*P\n" +
+	"\x11TransportProtocol\x12\x18\n" +
+	"\x14PROTOCOL_UNSPECIFIED\x10\x00\x12\a\n" +
+	"\x03TCP\x10\x01\x12\a\n" +
+	"\x03UDP\x10\x02\x12\x0f\n" +
+	"\vTCP_AND_UDP\x10\x03*.\n" +
+	"\tDemuxMode\x12\x0e\n" +
+	"\n" +
+	"DEMUX_PORT\x10\x00\x12\x11\n" +
+	"\rDEMUX_TLS_SNI\x10\x01*N\n" +
+	"\rRoutingPolicy\x12\x11\n" +
+	"\rCLUSTERED_RTT\x10\x00\x12\x14\n" +
+	"\x10FAILOVER_STANDBY\x10\x01\x12\x14\n" +
+	"\x10STRICT_SINGLETON\x10\x02*6\n" +
+	"\vMessageType\x12\f\n" +
+	"\bANNOUNCE\x10\x00\x12\r\n" +
+	"\tHEARTBEAT\x10\x01\x12\n" +
+	"\n" +
+	"\x06REVOKE\x10\x02B'Z%p2p-anycast/pkg/proto/control;controlb\x06proto3"
 
 var (
 	file_control_proto_rawDescOnce sync.Once

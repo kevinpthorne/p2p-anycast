@@ -332,6 +332,16 @@ func GenerateTestIdentity() (*IdentityKey, error) {
 func NewEphemeralIdentity() (*IdentityKey, error) {
 	return GenerateTestIdentity()
 }
+// GenerateTestECDSAIdentity generates an ephemeral in-memory ECDSA P-256 identity key for unit tests,
+// mirroring hardware TPM2 and Apple Secure Enclave identities (multihash SHA2-256 peer IDs).
+func GenerateTestECDSAIdentity() (*IdentityKey, error) {
+	priv, _, err := ic.GenerateKeyPair(ic.ECDSA, 256)
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate test ECDSA identity key: %w", err)
+	}
+	return buildIdentity(priv, TierFilesystem)
+}
+
 
 // buildIdentity wraps a libp2p private key and derives the stable Peer ID.
 func buildIdentity(priv ic.PrivKey, tier KeystoreTier) (*IdentityKey, error) {

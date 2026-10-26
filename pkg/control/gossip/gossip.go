@@ -56,6 +56,30 @@ func SignRegistration(reg *control.ServiceRegistration, priv ic.PrivKey) error {
 		reg.Timestamp = time.Now().Unix()
 	}
 
+	pub := priv.GetPublic()
+	if reg.OriginPeerId == "" {
+		pID, err := peer.IDFromPublicKey(pub)
+		if err != nil {
+			return fmt.Errorf("deriving Peer ID from public key: %w", err)
+		}
+		reg.OriginPeerId = pID.String()
+	}
+
+	// If the Peer ID does not embed the public key (e.g. ECDSA, TPM, RSA where ExtractPublicKey fails),
+	// attach the marshaled public key so that downstream verifiers can verify the signature self-contained.
+	if len(reg.OriginPublicKey) == 0 {
+		originPeer, err := peer.Decode(reg.OriginPeerId)
+		if err == nil {
+			if _, extErr := originPeer.ExtractPublicKey(); extErr != nil {
+				pubBytes, mErr := ic.MarshalPublicKey(pub)
+				if mErr != nil {
+					return fmt.Errorf("marshaling public key: %w", mErr)
+				}
+				reg.OriginPublicKey = pubBytes
+			}
+		}
+	}
+
 	payload, err := buildRegistrationSigningPayload(reg)
 	if err != nil {
 		return err
@@ -70,6 +94,8 @@ func SignRegistration(reg *control.ServiceRegistration, priv ic.PrivKey) error {
 }
 
 // VerifyRegistration verifies the non-repudiable OriginSignature and freshness of a ServiceRegistration.
+// The origin's public key is extracted either from OriginPublicKey (for non-inlined keys such as
+// ECDSA/TPM/RSA) or directly from OriginPeerId (for inlined keys such as Ed25519).
 func VerifyRegistration(reg *control.ServiceRegistration) error {
 	if reg == nil || reg.OriginPeerId == "" || len(reg.OriginSignature) == 0 {
 		return ErrInvalidOriginSignature
@@ -88,9 +114,23 @@ func VerifyRegistration(reg *control.ServiceRegistration) error {
 	if err != nil {
 		return fmt.Errorf("%w: invalid OriginPeerId: %v", ErrInvalidOriginSignature, err)
 	}
-	pubKey, err := originPeer.ExtractPublicKey()
-	if err != nil || pubKey == nil {
-		return fmt.Errorf("%w: cannot extract public key from OriginPeerId: %v", ErrInvalidOriginSignature, err)
+
+	var pubKey ic.PubKey
+	if len(reg.OriginPublicKey) > 0 {
+		pk, err := ic.UnmarshalPublicKey(reg.OriginPublicKey)
+		if err != nil {
+			return fmt.Errorf("%w: invalid OriginPublicKey: %v", ErrInvalidOriginSignature, err)
+		}
+		if !originPeer.MatchesPublicKey(pk) {
+			return fmt.Errorf("%w: OriginPublicKey does not match OriginPeerId %s", ErrInvalidOriginSignature, originPeer)
+		}
+		pubKey = pk
+	} else {
+		pk, err := originPeer.ExtractPublicKey()
+		if err != nil || pk == nil {
+			return fmt.Errorf("%w: cannot extract public key from OriginPeerId: public key is not embedded in peer ID and OriginPublicKey is missing (origin upgrade required)", ErrInvalidOriginSignature)
+		}
+		pubKey = pk
 	}
 
 	payload, err := buildRegistrationSigningPayload(reg)
@@ -104,6 +144,8 @@ func VerifyRegistration(reg *control.ServiceRegistration) error {
 	}
 	return nil
 }
+
+
 
 func buildRegistrationSigningPayload(reg *control.ServiceRegistration) ([]byte, error) {
 	clone := proto.Clone(reg).(*control.ServiceRegistration)

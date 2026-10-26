@@ -15,6 +15,7 @@ import (
 	"p2p-anycast/pkg/pki/manifest"
 	"p2p-anycast/pkg/pki/mldsa"
 	identity "p2p-anycast/pkg/proto/identity"
+	"p2p-anycast/pkg/version"
 )
 
 type PolicyJSON struct {
@@ -63,6 +64,8 @@ func main() {
 		cmdSign(os.Args[2:])
 	case "inspect":
 		cmdInspect(os.Args[2:])
+	case "version", "-v", "--version", "-version":
+		fmt.Printf("anycast-ca %s\n", version.Info())
 	default:
 		fmt.Fprintf(os.Stderr, "Unknown subcommand: %s\n", subcommand)
 		printUsage()
@@ -76,6 +79,7 @@ func printUsage() {
 	fmt.Println("  init     Generate a new Root ML-DSA-87 keypair (ca.priv, ca.pub)")
 	fmt.Println("  sign     Sign an IdentityClaims policy and generate manifest.pb")
 	fmt.Println("  inspect  Inspect and verify a SignedCapabilityManifest (manifest.pb)")
+	fmt.Println("  version  Print version and exit")
 }
 
 func cmdInit(args []string) {
