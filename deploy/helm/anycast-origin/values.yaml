@@ -30,8 +30,10 @@ service:
 
 config:
   # The config JSON will be created as a ConfigMap
+  # edge_multiaddrs functions as static destination edges and DHT bootstrap nodes
   edge_multiaddrs: []
     # - "/ip4/203.0.113.10/udp/4002/quic-v1/p2p/12D3KooWEdgePeerID..."
+  enableEdgeDiscovery: true
   services: []
     # - service_id: "web-api"
     #   protocol: "TCP"

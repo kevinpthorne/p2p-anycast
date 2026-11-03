@@ -32,6 +32,7 @@ import (
 )
 
 type OriginConfigJSON struct {
+	// EdgeMultiaddrs defines static destination edge multiaddrs and DHT bootstrap nodes.
 	EdgeMultiaddrs  []string             `json:"edge_multiaddrs"`
 	Services        []ServiceConfigJSON  `json:"services"`
 }
@@ -80,6 +81,8 @@ func main() {
 	k8sAnnotationPrefix := flag.String("k8s-annotation-prefix", "", "Custom annotation prefix (default: p2p-anycast.io and anycast.io)")
 	k8sInsecure := flag.Bool("k8s-insecure-skip-tls-verify", false, "Skip TLS verification when connecting to Kubernetes API")
 	printVersion := flag.Bool("version", false, "Print version and exit")
+	enableEdgeDiscovery := flag.Bool("enable-edge-discovery", true, "Enable dynamic Edge router discovery via Kademlia DHT")
+	edgeDiscoveryInterval := flag.Duration("edge-discovery-interval", 30*time.Second, "Polling interval for DHT dynamic edge discovery")
 	flag.Parse()
 
 	if *printVersion {
@@ -266,14 +269,16 @@ func main() {
 
 	// 7. Initialize Origin Dialer Node
 	originNode, err := dialer.NewOriginNode(ctx, dialer.Config{
-		Host:          h,
-		Authenticator: authenticator,
-		Registry:      registry,
-		Routes:        routes,
-		NATTable:      natTable,
-		OriginKey:     originMasterKey,
-		EdgeAddrs:     cfgJSON.EdgeMultiaddrs,
-		Services:      services,
+		Host:              h,
+		Authenticator:     authenticator,
+		Registry:          registry,
+		Routes:            routes,
+		NATTable:          natTable,
+		OriginKey:         originMasterKey,
+		EdgeAddrs:         cfgJSON.EdgeMultiaddrs,
+		Services:          services,
+		EnableDHT:         *enableEdgeDiscovery,
+		DiscoveryInterval: *edgeDiscoveryInterval,
 	})
 	if err != nil {
 		log.Fatalf("[Origin] Failed to create OriginNode: %v", err)
@@ -281,6 +286,9 @@ func main() {
 	defer originNode.Close()
 
 	originNode.Start()
+	if *enableEdgeDiscovery {
+		log.Printf("[Origin] Kademlia DHT dynamic edge discovery enabled (interval: %s)", *edgeDiscoveryInterval)
+	}
 	log.Printf("[Origin] Outbound dialer started; dialing %d configured edge(s) in background...", len(cfgJSON.EdgeMultiaddrs))
 
 	if k8sEnabled && k8sClient != nil {

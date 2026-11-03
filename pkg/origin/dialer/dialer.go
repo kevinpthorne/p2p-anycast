@@ -10,9 +10,11 @@ import (
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
+	"github.com/libp2p/go-libp2p/core/peerstore"
 	"github.com/multiformats/go-multiaddr"
 
 	"p2p-anycast/pkg/control/binding"
+	"p2p-anycast/pkg/control/discovery"
 	"p2p-anycast/pkg/control/gossip"
 	control "p2p-anycast/pkg/proto/control"
 	"p2p-anycast/pkg/origin/dispatch"
@@ -34,31 +36,41 @@ type ServiceConfig struct {
 
 // OriginNode manages outbound persistent connections to Edges and heartbeat announcements.
 type OriginNode struct {
-	mu           sync.RWMutex
-	host         host.Host
+	mu            sync.RWMutex
+	host          host.Host
 	authenticator *auth.Authenticator
-	registry     *gossip.MeshRegistry
-	routes       *dispatch.Table
-	natTable     *nat.Table
-	originKey    []byte
-	edgeAddrs    []multiaddr.Multiaddr
-	services     []ServiceConfig
-	activeEdges  map[peer.ID]bool
-	leaseEpoch   uint64
-	ctx          context.Context
-	cancel       context.CancelFunc
+	registry      *gossip.MeshRegistry
+	routes        *dispatch.Table
+	natTable      *nat.Table
+	originKey     []byte
+	edgeAddrs     []multiaddr.Multiaddr
+	services      []ServiceConfig
+	activeEdges   map[peer.ID]bool
+	leaseEpoch    uint64
+	ctx           context.Context
+	cancel        context.CancelFunc
+
+	// Dynamic DHT edge discovery
+	enableDHT         bool
+	discoveryInterval time.Duration
+	discoverer        *discovery.EdgeDiscoverer
+	workers           map[peer.ID]context.CancelFunc
+	staticEdges       map[peer.ID]bool
+	untrustedEdges    map[peer.ID]bool
 }
 
 // Config defines OriginNode options.
 type Config struct {
-	Host          host.Host
-	Authenticator *auth.Authenticator
-	Registry      *gossip.MeshRegistry
-	Routes        *dispatch.Table
-	NATTable      *nat.Table
-	OriginKey     []byte
-	EdgeAddrs     []string
-	Services      []ServiceConfig
+	Host              host.Host
+	Authenticator     *auth.Authenticator
+	Registry          *gossip.MeshRegistry
+	Routes            *dispatch.Table
+	NATTable          *nat.Table
+	OriginKey         []byte
+	EdgeAddrs         []string
+	Services          []ServiceConfig
+	EnableDHT         bool
+	DiscoveryInterval time.Duration
 }
 
 // NewOriginNode creates a new Origin daemon instance.
@@ -75,19 +87,38 @@ func NewOriginNode(ctx context.Context, cfg Config) (*OriginNode, error) {
 		mAddrs = append(mAddrs, ma)
 	}
 
+	discoveryInterval := cfg.DiscoveryInterval
+	if discoveryInterval <= 0 {
+		discoveryInterval = discovery.DefaultDiscoveryInterval
+	}
+
 	node := &OriginNode{
-		host:          cfg.Host,
-		authenticator: cfg.Authenticator,
-		registry:      cfg.Registry,
-		routes:        cfg.Routes,
-		natTable:      cfg.NATTable,
-		originKey:     cfg.OriginKey,
-		edgeAddrs:     mAddrs,
-		services:      cfg.Services,
-		activeEdges:   make(map[peer.ID]bool),
-		leaseEpoch:    uint64(time.Now().UnixMilli()),
-		ctx:           oCtx,
-		cancel:        cancel,
+		host:              cfg.Host,
+		authenticator:     cfg.Authenticator,
+		registry:          cfg.Registry,
+		routes:            cfg.Routes,
+		natTable:          cfg.NATTable,
+		originKey:         cfg.OriginKey,
+		edgeAddrs:         mAddrs,
+		services:          cfg.Services,
+		activeEdges:       make(map[peer.ID]bool),
+		leaseEpoch:        uint64(time.Now().UnixMilli()),
+		ctx:               oCtx,
+		cancel:            cancel,
+		enableDHT:         cfg.EnableDHT,
+		discoveryInterval: discoveryInterval,
+		workers:           make(map[peer.ID]context.CancelFunc),
+		staticEdges:       make(map[peer.ID]bool),
+		untrustedEdges:    make(map[peer.ID]bool),
+	}
+
+	if cfg.EnableDHT {
+		discoverer, err := discovery.NewEdgeDiscoverer(oCtx, cfg.Host)
+		if err != nil {
+			cancel()
+			return nil, fmt.Errorf("failed to create edge discoverer: %w", err)
+		}
+		node.discoverer = discoverer
 	}
 
 	if cfg.NATTable != nil && cfg.Authenticator != nil {
@@ -124,18 +155,42 @@ func NewOriginNode(ctx context.Context, cfg Config) (*OriginNode, error) {
 	return node, nil
 }
 
-// Start launches the outbound dialer loops and heartbeat publisher.
+// Start launches the outbound dialer loops, optional DHT discovery, and heartbeat publisher.
 func (o *OriginNode) Start() {
+	var bootstrapInfos []peer.AddrInfo
 	for _, maddr := range o.edgeAddrs {
-		go o.maintainConnection(maddr)
+		addrInfo, err := peer.AddrInfoFromP2pAddr(maddr)
+		if err != nil {
+			log.Printf("[Origin] Invalid edge multiaddr %s: %v", maddr, err)
+			continue
+		}
+		bootstrapInfos = append(bootstrapInfos, *addrInfo)
+		o.AddEdge(*addrInfo, true)
+	}
+
+	if o.enableDHT && o.discoverer != nil {
+		if len(bootstrapInfos) > 0 {
+			if err := o.discoverer.Bootstrap(o.ctx, bootstrapInfos); err != nil {
+				log.Printf("[Origin] Warning: DHT discoverer bootstrap failed: %v", err)
+			}
+		}
+		go o.edgeDiscoveryLoop()
 	}
 
 	go o.heartbeatLoop()
 }
 
-// Close stops the origin node.
+// Close stops the origin node and DHT discoverer.
 func (o *OriginNode) Close() {
 	o.cancel()
+	o.mu.Lock()
+	for _, cancel := range o.workers {
+		cancel()
+	}
+	o.mu.Unlock()
+	if o.discoverer != nil {
+		_ = o.discoverer.Close()
+	}
 }
 
 // UpdateServices updates the active services list, prunes removed dispatch routes,
@@ -211,59 +266,147 @@ func (o *OriginNode) revokeServicesOnEdge(edgePeer peer.ID, removed []ServiceCon
 	}()
 }
 
-// maintainConnection persists an outbound QUIC connection to an Edge with exponential backoff.
-func (o *OriginNode) maintainConnection(addr multiaddr.Multiaddr) {
-	addrInfo, err := peer.AddrInfoFromP2pAddr(addr)
-	if err != nil {
-		log.Printf("[Origin] Invalid edge multiaddr %s: %v", addr, err)
-		return
+// AddEdge registers and dials an edge router. If a worker is already running for the peer,
+// AddEdge merges any new addresses and updates static designation without spawning a duplicate worker.
+// Returns true if a new worker goroutine was spawned.
+func (o *OriginNode) AddEdge(info peer.AddrInfo, isStatic bool) bool {
+	if info.ID == o.host.ID() || info.ID == "" {
+		return false
 	}
+
+	o.mu.Lock()
+	if o.untrustedEdges[info.ID] {
+		o.mu.Unlock()
+		return false
+	}
+
+	if len(info.Addrs) > 0 {
+		ttl := peerstore.AddressTTL
+		if isStatic {
+			ttl = peerstore.PermanentAddrTTL
+		}
+		o.host.Peerstore().AddAddrs(info.ID, info.Addrs, ttl)
+	}
+
+	if isStatic {
+		o.staticEdges[info.ID] = true
+	}
+
+	if _, exists := o.workers[info.ID]; exists {
+		o.mu.Unlock()
+		return false
+	}
+
+	workerCtx, workerCancel := context.WithCancel(o.ctx)
+	o.workers[info.ID] = workerCancel
+	o.mu.Unlock()
+
+	go o.maintainPeer(workerCtx, info)
+	return true
+}
+
+func (o *OriginNode) isStaticEdge(id peer.ID) bool {
+	o.mu.RLock()
+	defer o.mu.RUnlock()
+	return o.staticEdges[id]
+}
+
+func (o *OriginNode) isUntrusted(id peer.ID) bool {
+	o.mu.RLock()
+	defer o.mu.RUnlock()
+	return o.untrustedEdges[id]
+}
+
+// ActiveEdges returns a snapshot of currently authenticated and active edge peer IDs.
+func (o *OriginNode) ActiveEdges() []peer.ID {
+	o.mu.RLock()
+	defer o.mu.RUnlock()
+	res := make([]peer.ID, 0, len(o.activeEdges))
+	for id, active := range o.activeEdges {
+		if active {
+			res = append(res, id)
+		}
+	}
+	return res
+}
+
+// maintainPeer persists an outbound QUIC connection to an Edge with exponential backoff.
+func (o *OriginNode) maintainPeer(ctx context.Context, info peer.AddrInfo) {
+	defer func() {
+		o.mu.Lock()
+		delete(o.workers, info.ID)
+		delete(o.activeEdges, info.ID)
+		o.mu.Unlock()
+	}()
 
 	backoff := 500 * time.Millisecond
 	maxBackoff := 15 * time.Second
+	consecutiveFailures := 0
 
 	for {
 		select {
+		case <-ctx.Done():
+			return
 		case <-o.ctx.Done():
 			return
 		default:
 		}
 
-		err := o.host.Connect(o.ctx, *addrInfo)
+		err := o.host.Connect(ctx, info)
 		if err != nil {
-			log.Printf("[Origin] Failed to connect to edge %s (%s): %v", addrInfo.ID, addr, err)
+			consecutiveFailures++
+			log.Printf("[Origin] Failed to connect to edge %s: %v (consecutive failures: %d)", info.ID, err, consecutiveFailures)
+			if !o.isStaticEdge(info.ID) && consecutiveFailures >= 5 {
+				log.Printf("[Origin] Dynamic edge %s failed %d consecutive times; stopping worker", info.ID, consecutiveFailures)
+				return
+			}
 		} else {
-			// Run mutual authentication over /p2p-anycast/auth/1.0.0
-			claims, authErr := o.authenticator.AuthenticateOutbound(o.ctx, addrInfo.ID)
-			if authErr != nil {
-				log.Printf("[Origin] Mutual authentication failed with edge %s: %v", addrInfo.ID, authErr)
-			} else {
-				log.Printf("[Origin] Successfully connected and authenticated with edge %s (Subject: %q)", addrInfo.ID, claims.SubjectId)
-				o.mu.Lock()
-				o.activeEdges[addrInfo.ID] = true
-				o.mu.Unlock()
-
-				// Announce services to Edge
-				o.announceServicesToEdge(addrInfo.ID)
-
-				backoff = 500 * time.Millisecond
-
-				// Wait until connection closes
-				for {
-					if len(o.host.Network().ConnsToPeer(addrInfo.ID)) == 0 {
-						log.Printf("[Origin] Connection to edge %s lost, will reconnect...", addrInfo.ID)
-						break
+			if o.authenticator != nil {
+				claims, authErr := o.authenticator.AuthenticateOutbound(ctx, info.ID)
+				if authErr != nil {
+					log.Printf("[Origin] SECURITY ALERT: Mutual authentication failed with edge %s: %v. Dropping untrusted peer.", info.ID, authErr)
+					o.mu.Lock()
+					o.untrustedEdges[info.ID] = true
+					o.mu.Unlock()
+					for _, c := range o.host.Network().ConnsToPeer(info.ID) {
+						_ = c.Close()
 					}
-					select {
-					case <-o.ctx.Done():
-						return
-					case <-time.After(1 * time.Second):
-					}
+					_ = o.host.Network().ClosePeer(info.ID)
+					o.host.Peerstore().ClearAddrs(info.ID)
+					return
+				}
+				log.Printf("[Origin] Successfully connected and authenticated with edge %s (Subject: %q)", info.ID, claims.SubjectId)
+			}
+
+			consecutiveFailures = 0
+			o.mu.Lock()
+			o.activeEdges[info.ID] = true
+			o.mu.Unlock()
+
+			// Announce services to Edge
+			o.announceServicesToEdge(info.ID)
+
+			backoff = 500 * time.Millisecond
+
+			// Wait until connection closes
+			for {
+				if len(o.host.Network().ConnsToPeer(info.ID)) == 0 {
+					log.Printf("[Origin] Connection to edge %s lost, will reconnect...", info.ID)
+					break
+				}
+				select {
+				case <-ctx.Done():
+					return
+				case <-o.ctx.Done():
+					return
+				case <-time.After(1 * time.Second):
 				}
 			}
 		}
 
 		select {
+		case <-ctx.Done():
+			return
 		case <-o.ctx.Done():
 			return
 		case <-time.After(backoff):
@@ -272,6 +415,46 @@ func (o *OriginNode) maintainConnection(addr multiaddr.Multiaddr) {
 				backoff = maxBackoff
 			}
 		}
+	}
+}
+
+func (o *OriginNode) edgeDiscoveryLoop() {
+	// Initial discovery immediate pass
+	o.discoverEdges()
+
+	ticker := time.NewTicker(o.discoveryInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-o.ctx.Done():
+			return
+		case <-ticker.C:
+			o.discoverEdges()
+		}
+	}
+}
+
+func (o *OriginNode) discoverEdges() {
+	if o.discoverer == nil {
+		return
+	}
+	edgeChan, err := o.discoverer.FindEdges(o.ctx, 100)
+	if err != nil {
+		if o.ctx.Err() == nil {
+			log.Printf("[Origin] DHT edge discovery query failed: %v", err)
+		}
+		return
+	}
+
+	for p := range edgeChan {
+		if p.ID == o.host.ID() || p.ID == "" || o.isUntrusted(p.ID) {
+			if o.isUntrusted(p.ID) {
+				_ = o.host.Network().ClosePeer(p.ID)
+			}
+			continue
+		}
+		o.AddEdge(p, false)
 	}
 }
 

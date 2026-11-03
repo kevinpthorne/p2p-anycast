@@ -7,7 +7,7 @@ import (
 
 func TestVersionInfo(t *testing.T) {
 	v := Info()
-	if !strings.HasPrefix(v, "v1.0.1") {
-		t.Fatalf("expected version string to start with v1.0.1, got: %s", v)
+	if !strings.HasPrefix(v, "v1.1.0") {
+		t.Fatalf("expected version string to start with v1.1.0, got: %s", v)
 	}
 }

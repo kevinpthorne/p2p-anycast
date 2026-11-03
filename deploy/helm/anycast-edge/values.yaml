@@ -38,7 +38,7 @@ service:
 config:
   listenP2p: "/ip4/0.0.0.0/udp/4002/quic-v1"
   firewall: "none" # "auto", "iptables", "nftables", "none"
-
+  bootstrapEdges: []
 # ConfigMap containing public values: CA public key and edge manifest
 existingConfigMap: ""
 # If existingConfigMap is not provided, the chart will look for these public values to populate the ConfigMap

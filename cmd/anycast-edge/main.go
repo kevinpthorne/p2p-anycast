@@ -7,10 +7,13 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 
 	"github.com/libp2p/go-libp2p/core/peer"
+	"github.com/multiformats/go-multiaddr"
 
+	"p2p-anycast/pkg/control/discovery"
 	"p2p-anycast/pkg/control/gossip"
 	"p2p-anycast/pkg/control/lease"
 	"p2p-anycast/pkg/edge/firewall"
@@ -33,8 +36,29 @@ func main() {
 	printPeerID := flag.Bool("print-peer-id", false, "Print the libp2p Peer ID derived from the identity key and exit")
 	firewallBackend := flag.String("firewall", "auto", "Firewall backend for dynamic port opening (auto, iptables, nftables, none)")
 	printVersion := flag.Bool("version", false, "Print version and exit")
+	bootstrapEdgesFlag := flag.String("bootstrap-edges", "", "Comma-separated list of multiaddrs for existing Edge peers (or ANYCAST_BOOTSTRAP_EDGES env var)")
+	enableDHT := flag.Bool("enable-dht", true, "Enable Kademlia DHT server for dynamic edge discovery")
 	flag.Parse()
 
+	bootstrapEdgesStr := *bootstrapEdgesFlag
+	if bootstrapEdgesStr == "" {
+		bootstrapEdgesStr = os.Getenv("ANYCAST_BOOTSTRAP_EDGES")
+	}
+	var bootstrapMaddrs []multiaddr.Multiaddr
+	if bootstrapEdgesStr != "" {
+		for _, part := range strings.Split(bootstrapEdgesStr, ",") {
+			part = strings.TrimSpace(part)
+			if part == "" {
+				continue
+			}
+			ma, err := multiaddr.NewMultiaddr(part)
+			if err != nil {
+				log.Printf("[Edge] Warning: invalid bootstrap edge multiaddr %q: %v", part, err)
+				continue
+			}
+			bootstrapMaddrs = append(bootstrapMaddrs, ma)
+		}
+	}
 	if *printVersion {
 		fmt.Printf("anycast-edge %s\n", version.Info())
 		return
@@ -87,6 +111,16 @@ func main() {
 	for _, addr := range h.Addrs() {
 		log.Printf("[Edge] Listening on: %s/p2p/%s", addr, h.ID())
 	}
+	// Start Kademlia DHT Server and Edge Advertiser if enabled
+	if *enableDHT {
+		advertiser, err := discovery.NewEdgeAdvertiser(ctx, h, bootstrapMaddrs)
+		if err != nil {
+			log.Fatalf("[Edge] Failed to start Kademlia DHT server: %v", err)
+		}
+		defer advertiser.Close()
+		log.Printf("[Edge] Kademlia DHT server started; advertising on rendezvous %s", discovery.EdgeRendezvousNamespace)
+	}
+
 
 	// 5. Setup Authentication Protocol (/p2p-anycast/auth/1.0.0)
 	authenticator := auth.NewAuthenticator(h, idKey, signedManifest, caPub)

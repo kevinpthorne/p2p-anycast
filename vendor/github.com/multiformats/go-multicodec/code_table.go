@@ -351,6 +351,9 @@ const (
 	// Crc64Ecma is a draft code tagged "hash" and described by: CRC-64 non-cryptographic hash algorithm (ECMA-182 - Annex B).
 	Crc64Ecma Code = 0x0164 // crc64-ecma
 
+	// Crc64Nvme is a draft code tagged "hash" and described by: CRC-64 checksum based on the NVME polynomial as specified in the NVM Express® NVM Command Set Specification.
+	Crc64Nvme Code = 0x0165 // crc64-nvme
+
 	// Unix is a permanent code tagged "multiaddr".
 	Unix Code = 0x0190 // unix
 
@@ -426,6 +429,9 @@ const (
 	// Car is a draft code tagged "serialization" and described by: Content Addressable aRchive (CAR).
 	Car Code = 0x0202 // car
 
+	// X509Certificate is a draft code tagged "serialization" and described by: DER-encoded X.509 (PKIX) certificate per RFC 5280; single certificate only (no chain); raw DER bytes (not PEM).
+	X509Certificate Code = 0x0210 // x509-certificate
+
 	// IpnsRecord is a permanent code tagged "serialization" and described by: Signed IPNS Record.
 	IpnsRecord Code = 0x0300 // ipns-record
 
@@ -452,6 +458,9 @@ const (
 
 	// TransportIpfsGatewayHttp is a draft code tagged "transport" and described by: HTTP IPFS Gateway trustless datatransfer.
 	TransportIpfsGatewayHttp Code = 0x0920 // transport-ipfs-gateway-http
+
+	// TransportFilecoinPieceHttp is a draft code tagged "transport" and described by: HTTP piece retrieval from Filecoin storage provider; https://github.com/filecoin-project/FIPs/blob/master/FRCs/frc-0066.md.
+	TransportFilecoinPieceHttp Code = 0x0930 // transport-filecoin-piece-http
 
 	// Multidid is a draft code tagged "multiformat" and described by: Compact encoding for Decentralized Identifers.
 	Multidid Code = 0x0d1d // multidid
@@ -587,6 +596,24 @@ const (
 
 	// Sm2Priv is a draft code tagged "key" and described by: SM2 private key.
 	Sm2Priv Code = 0x1310 // sm2-priv
+
+	// Ed448Priv is a draft code tagged "key" and described by: Ed448 private key.
+	Ed448Priv Code = 0x1311 // ed448-priv
+
+	// X448Priv is a draft code tagged "key" and described by: X448 private key.
+	X448Priv Code = 0x1312 // x448-priv
+
+	// Mlkem512Priv is a draft code tagged "key" and described by: ML-KEM 512 private key; as specified by FIPS 203.
+	Mlkem512Priv Code = 0x1313 // mlkem-512-priv
+
+	// Mlkem768Priv is a draft code tagged "key" and described by: ML-KEM 768 public key; as specified by FIPS 203.
+	Mlkem768Priv Code = 0x1314 // mlkem-768-priv
+
+	// Mlkem1024Priv is a draft code tagged "key" and described by: ML-KEM 1024 public key; as specified by FIPS 203.
+	Mlkem1024Priv Code = 0x1315 // mlkem-1024-priv
+
+	// Jwk_jcsPriv is a draft code tagged "key" and described by: JSON object containing only the required members of a JWK (RFC 7518 and RFC 7517) representing the private key. Serialisation based on JCS (RFC 8785).
+	Jwk_jcsPriv Code = 0x1316 // jwk_jcs-priv
 
 	// LamportSha3_512Pub is a draft code tagged "key" and described by: Lamport public key based on SHA3-512.
 	LamportSha3_512Pub Code = 0x1a14 // lamport-sha3-512-pub
@@ -1644,6 +1671,9 @@ const (
 	// JsonJcs is a draft code tagged "ipld" and described by: The result of canonicalizing an input according to JCS - JSON Canonicalisation Scheme (RFC 8785).
 	JsonJcs Code = 0xb601 // json-jcs
 
+	// BittorrentPiecesRoot is a draft code tagged "multihash" and described by: BitTorrent v2 pieces root hash..
+	BittorrentPiecesRoot Code = 0xb702 // bittorrent-pieces-root
+
 	// Iscc is a draft code tagged "softhash" and described by: ISCC (International Standard Content Code) - similarity preserving hash.
 	Iscc Code = 0xcc01 // iscc
 
@@ -1673,6 +1703,9 @@ const (
 
 	// Jwk_jcsPub is a draft code tagged "key" and described by: JSON object containing only the required members of a JWK (RFC 7518 and RFC 7517) representing the public key. Serialisation based on JCS (RFC 8785).
 	Jwk_jcsPub Code = 0xeb51 // jwk_jcs-pub
+
+	// Ed2k is a draft code tagged "multihash" and described by: eDonkey2000 hash..
+	Ed2k Code = 0xed20 // ed2k
 
 	// FilCommitmentUnsealed is a permanent code tagged "filecoin" and described by: Filecoin piece or sector data commitment merkle node/root (CommP & CommD).
 	FilCommitmentUnsealed Code = 0xf101 // fil-commitment-unsealed
@@ -1897,6 +1930,7 @@ var knownCodes = []Code{
 	Utp,
 	Crc32,
 	Crc64Ecma,
+	Crc64Nvme,
 	Unix,
 	Thread,
 	P2p,
@@ -1922,6 +1956,7 @@ var knownCodes = []Code{
 	Json,
 	Messagepack,
 	Car,
+	X509Certificate,
 	IpnsRecord,
 	Libp2pPeerRecord,
 	Libp2pRelayRsvp,
@@ -1931,6 +1966,7 @@ var knownCodes = []Code{
 	TransportBitswap,
 	TransportGraphsyncFilecoinv1,
 	TransportIpfsGatewayHttp,
+	TransportFilecoinPieceHttp,
 	Multidid,
 	Fr32Sha256Trunc254Padbintree,
 	Sha2_256Trunc254Padded,
@@ -1976,6 +2012,12 @@ var knownCodes = []Code{
 	Bls12_381G1PrivShare,
 	Bls12_381G2PrivShare,
 	Sm2Priv,
+	Ed448Priv,
+	X448Priv,
+	Mlkem512Priv,
+	Mlkem768Priv,
+	Mlkem1024Priv,
+	Jwk_jcsPriv,
 	LamportSha3_512Pub,
 	LamportSha3_384Pub,
 	LamportSha3_256Pub,
@@ -2328,6 +2370,7 @@ var knownCodes = []Code{
 	SszSha2_256Bmt,
 	Sha2_256Chunked,
 	JsonJcs,
+	BittorrentPiecesRoot,
 	Iscc,
 	ZeroxcertImprint256,
 	NonstandardSig,
@@ -2338,6 +2381,7 @@ var knownCodes = []Code{
 	Eddsa,
 	Eip191,
 	Jwk_jcsPub,
+	Ed2k,
 	FilCommitmentUnsealed,
 	FilCommitmentSealed,
 	ShelterContractManifest,
@@ -2393,6 +2437,7 @@ func (c Code) Tag() string {
 		Murmur3_32,
 		Crc32,
 		Crc64Ecma,
+		Crc64Nvme,
 		Murmur3X64_128,
 		Sha256a,
 		Xxh32,
@@ -2493,6 +2538,12 @@ func (c Code) Tag() string {
 		Bls12_381G1PrivShare,
 		Bls12_381G2PrivShare,
 		Sm2Priv,
+		Ed448Priv,
+		X448Priv,
+		Mlkem512Priv,
+		Mlkem768Priv,
+		Mlkem1024Priv,
+		Jwk_jcsPriv,
 		LamportSha3_512Pub,
 		LamportSha3_384Pub,
 		LamportSha3_256Pub,
@@ -2922,7 +2973,9 @@ func (c Code) Tag() string {
 		PoseidonBls12_381A2Fc1Sc,
 		SszSha2_256Bmt,
 		Sha2_256Chunked,
-		BcryptPbkdf:
+		BittorrentPiecesRoot,
+		BcryptPbkdf,
+		Ed2k:
 		return "multihash"
 
 	case Chacha20Poly1305:
@@ -2971,6 +3024,7 @@ func (c Code) Tag() string {
 		Bencode,
 		Messagepack,
 		Car,
+		X509Certificate,
 		IpnsRecord,
 		CarIndexSorted,
 		CarMultihashIndexSorted,
@@ -2992,7 +3046,8 @@ func (c Code) Tag() string {
 
 	case TransportBitswap,
 		TransportGraphsyncFilecoinv1,
-		TransportIpfsGatewayHttp:
+		TransportIpfsGatewayHttp,
+		TransportFilecoinPieceHttp:
 		return "transport"
 
 	case NonstandardSig,

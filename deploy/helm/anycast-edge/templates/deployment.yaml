@@ -63,6 +63,9 @@ spec:
             - -identity-key=/etc/anycast/secrets/identity.key
             {{- end }}
             - -firewall={{ .Values.config.firewall }}
+            {{- if .Values.config.bootstrapEdges }}
+            - -bootstrap-edges={{ join "," .Values.config.bootstrapEdges }}
+            {{- end }}
           ports:
             - name: p2p
               containerPort: {{ .Values.service.p2pPort }}

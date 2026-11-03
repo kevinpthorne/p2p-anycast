@@ -150,6 +150,11 @@ let
           default = [ ];
           description = "Additional systemd LoadCredential specifications to pass to the service.";
         };
+        bootstrapEdges = lib.mkOption {
+          type = lib.types.listOf lib.types.str;
+          default = [ ];
+          description = "List of multiaddrs for existing Edge peers to bootstrap Kademlia DHT edge discovery.";
+        };
 
         extraArgs = lib.mkOption {
           type = lib.types.listOf lib.types.str;
@@ -223,6 +228,10 @@ let
                 (lib.escapeShellArg (toString cfg.identityKey))
                 "--firewall"
                 (lib.escapeShellArg (if cfg.dynamicFirewall.enable then cfg.dynamicFirewall.backend else "none"))
+              ]
+              ++ lib.optionals (cfg.bootstrapEdges != [ ]) [
+                "--bootstrap-edges"
+                (lib.escapeShellArg (lib.concatStringsSep "," cfg.bootstrapEdges))
               ]
               ++ map lib.escapeShellArg cfg.extraArgs
             );

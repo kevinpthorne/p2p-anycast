@@ -63,6 +63,9 @@ spec:
             - -identity-key=/etc/anycast/secrets/identity.key
             {{- end }}
             - -master-key-file=/etc/anycast/secrets/master.key
+            {{- if hasKey .Values.config "enableEdgeDiscovery" }}
+            - -enable-edge-discovery={{ .Values.config.enableEdgeDiscovery }}
+            {{- end }}
             {{- if .Values.k8sDiscovery.enabled }}
             - -k8s=true
             {{- if .Values.k8sDiscovery.namespace }}

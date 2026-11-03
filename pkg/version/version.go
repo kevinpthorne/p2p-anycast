@@ -8,15 +8,15 @@ import (
 // Version is the semantic release version.
 // It can be overridden at link time via:
 //
-//	-ldflags "-X p2p-anycast/pkg/version.Version=v1.0.1"
-var Version = "1.0.1"
+//	-ldflags "-X p2p-anycast/pkg/version.Version=v1.1.0"
+var Version = "1.1.0"
 
 // Info returns a human-readable version string including VCS revision and dirty state if available.
 // Examples:
 //
-//	"v1.0.1 (7bde845)"
-//	"v1.0.1 (7bde845-dirty)"
-//	"v1.0.1"
+//	"v1.1.0 (7bde845)"
+//	"v1.1.0 (7bde845-dirty)"
+//	"v1.1.0"
 func Info() string {
 	revision, modified := "", false
 	if bi, ok := debug.ReadBuildInfo(); ok {
