@@ -508,15 +508,47 @@ metadata:
     p2p-anycast.io/sni-hostnames: "api.example.com, dash.example.com"
 ```
 
+For an SNI Service, `public-port` also accepts a comma-separated list:
+
+```yaml
+metadata:
+  annotations:
+    p2p-anycast.io/expose: "true"
+    p2p-anycast.io/policy: "STRICT_SINGLETON"
+    p2p-anycast.io/sni-hostnames: "catcher.example.com"
+    p2p-anycast.io/public-port: "1936,3334"
+spec:
+  ports:
+    - name: rtmps
+      port: 1936
+      protocol: TCP
+    - name: whip
+      port: 3334
+      protocol: TCP
+```
+
+Each hostname/public-port pair gets its own registration and dispatch binding.
+With multiple public ports and no target override, each port must match a TCP port on the annotated Service;
+the backends above become `<service>.<namespace>.svc.cluster.local:1936` and `:3334`.
+`target.<public-port>` overrides one backend; a global `target` overrides all of them.
+Remove an old global `target: "...:1936"` if WHIP should reach port 3334 instead.
+Single-port target defaults are unchanged.
+
+TLSRoutes also accept a `public-port` list; all listed ports use the route's configured backend or gateway.
+Whitespace is trimmed and duplicate ports are advertised only once. Malformed entries, empty list elements,
+and ports outside 1–65535 reject the whole resource rather than silently falling back to 443.
+All advertised ports and SNI hostnames must still be authorized by the origin's signed capability manifest.
+
 #### Supported Annotations
 
 | Annotation | Description | Default |
 | --- | --- | --- |
 | `p2p-anycast.io/expose` (or `anycast.io/expose`) | Enable `p2p-anycast` exposure (`"true"`, `"1"`, `"yes"`). | `"false"` |
 | `p2p-anycast.io/policy` | Origin dispatch policy (`STRICT_SINGLETON`, `CLUSTERED_RTT`, `FAILOVER_STANDBY`). | **`STRICT_SINGLETON`** |
-| `p2p-anycast.io/public-port` | Public port requested on Edge routers. | `443` (for SNI/TLSRoute) or Service port |
+| `p2p-anycast.io/public-port` | Public port, or comma-separated ports for SNI Services/TLSRoutes. L4 overrides take one port. | `443` (for SNI/TLSRoute) or Service port |
 | `p2p-anycast.io/protocol` | Transport protocol (`TCP`, `UDP`, `TCP_AND_UDP`). | Port protocol |
 | `p2p-anycast.io/target` | Target backend address dialed by Origin. | `<svc>.<ns>.svc.cluster.local:<port>` or parent Gateway |
+| `p2p-anycast.io/target.<public-port>` | Override one backend on an SNI Service advertising multiple public ports. | Global target, then matching TCP Service port |
 | `p2p-anycast.io/target-backend` | When set to `"true"` on a `TLSRoute`, targets `backendRefs` instead of parent Gateway. | `"false"` |
 | `p2p-anycast.io/sni-hostname` | Single SNI hostname on a `Service`. | `""` |
 | `p2p-anycast.io/sni-hostnames` | Comma-separated SNI hostnames on a gateway `Service`. | `""` |

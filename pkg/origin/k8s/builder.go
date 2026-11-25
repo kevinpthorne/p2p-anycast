@@ -174,6 +174,35 @@ func sanitizeID(s string) string {
 	return strings.ReplaceAll(strings.ReplaceAll(s, ".", "-"), "_", "-")
 }
 
+// parsePublicPorts rejects the whole annotation on malformed input rather than
+// silently advertising a default or only part of the requested port list.
+func parsePublicPorts(value string, fallback uint32) ([]uint32, error) {
+	if value == "" {
+		if fallback == 0 || fallback > 65535 {
+			return nil, fmt.Errorf("invalid default public port %d", fallback)
+		}
+		return []uint32{fallback}, nil
+	}
+	ports := make([]uint32, 0, strings.Count(value, ",")+1)
+	for token := range strings.SplitSeq(value, ",") {
+		port, err := strconv.ParseUint(strings.TrimSpace(token), 10, 16)
+		if err != nil || port == 0 {
+			return nil, fmt.Errorf("invalid public port %q", token)
+		}
+		duplicate := false
+		for _, existing := range ports {
+			if existing == uint32(port) {
+				duplicate = true
+				break
+			}
+		}
+		if !duplicate {
+			ports = append(ports, uint32(port))
+		}
+	}
+	return ports, nil
+}
+
 func buildFromService(svc Service, opts BuilderOptions) []dialer.ServiceConfig {
 	annos := svc.Metadata.Annotations
 	if !isExposed(annos, opts.AnnotationPrefix) {
@@ -186,94 +215,84 @@ func buildFromService(svc Service, opts BuilderOptions) []dialer.ServiceConfig {
 	}
 	svcName := svc.Metadata.Name
 
-	// Case 1: Multiple SNI hostnames annotated directly on service (e.g. on Cilium Gateway)
-	sniHostnamesStr := getAnnotation(annos, "sni-hostnames", opts.AnnotationPrefix)
-	if sniHostnamesStr != "" {
-		hostnames := strings.Split(sniHostnamesStr, ",")
-		var out []dialer.ServiceConfig
-		policy := parsePolicy(getAnnotation(annos, "policy", opts.AnnotationPrefix))
-		enableProxy := parseBool(getAnnotation(annos, "enable-proxy-protocol", opts.AnnotationPrefix))
-		publicPort := uint32(443)
-		if pStr := getAnnotation(annos, "public-port", opts.AnnotationPrefix); pStr != "" {
-			if p, err := strconv.ParseUint(pStr, 10, 32); err == nil {
-				publicPort = uint32(p)
-			}
+	sniHostnames := getAnnotation(annos, "sni-hostnames", opts.AnnotationPrefix)
+	sniHostname := getAnnotation(annos, "sni-hostname", opts.AnnotationPrefix)
+	if sniHostnames != "" || sniHostname != "" {
+		hostnames := []string{sniHostname}
+		if sniHostnames != "" {
+			hostnames = strings.Split(sniHostnames, ",")
 		}
-
-		target := getAnnotation(annos, "target", opts.AnnotationPrefix)
-		if target == "" {
-			target = fmt.Sprintf("%s.%s.svc.cluster.local:443", svcName, ns)
-		}
-		if err := ValidateTargetEndpoint(target, opts.AllowLocalhostTargets); err != nil {
-			log.Printf("[K8sBuilder] Rejecting unsafe target for service %s/%s: %v", ns, svcName, err)
+		publicPorts, err := parsePublicPorts(getAnnotation(annos, "public-port", opts.AnnotationPrefix), 443)
+		if err != nil {
+			log.Printf("[K8sBuilder] Rejecting service %s/%s: %v", ns, svcName, err)
 			return nil
 		}
-
+		policy := parsePolicy(getAnnotation(annos, "policy", opts.AnnotationPrefix))
+		enableProxy := parseBool(getAnnotation(annos, "enable-proxy-protocol", opts.AnnotationPrefix))
 		baseID := getAnnotation(annos, "service-id", opts.AnnotationPrefix)
 		if baseID == "" {
 			baseID = svcName
 		}
-
-		for _, h := range hostnames {
-			host := strings.TrimSpace(h)
-			if host == "" {
-				continue
+		out := make([]dialer.ServiceConfig, 0, len(hostnames)*len(publicPorts))
+		for portIndex, publicPort := range publicPorts {
+			portString := strconv.FormatUint(uint64(publicPort), 10)
+			target := getAnnotation(annos, "target."+portString, opts.AnnotationPrefix)
+			if target == "" {
+				target = getAnnotation(annos, "target", opts.AnnotationPrefix)
 			}
-			sID := fmt.Sprintf("%s-%s", baseID, sanitizeID(host))
-			out = append(out, dialer.ServiceConfig{
-				ServiceID:           sID,
-				Protocol:            control.TransportProtocol_TCP,
-				PublicPort:          publicPort,
-				Policy:              policy,
-				SNIHostname:         host,
-				Target:              target,
-				EnableProxyProtocol: enableProxy,
-			})
+			if target == "" {
+				if len(publicPorts) > 1 {
+					// A port list selects matching TCP Service ports, not one shared gateway.
+					matched := false
+					for _, port := range svc.Spec.Ports {
+						if uint32(port.Port) == publicPort && (port.Protocol == "" || port.Protocol == "TCP") {
+							matched = true
+							break
+						}
+					}
+					if !matched {
+						log.Printf("[K8sBuilder] Rejecting service %s/%s: public port %d has no matching TCP Service port or target override", ns, svcName, publicPort)
+						return nil
+					}
+					target = svcName + "." + ns + ".svc.cluster.local:" + portString
+				} else if sniHostnames == "" && opts.DefaultGatewayTarget != "" {
+					target = opts.DefaultGatewayTarget
+				} else {
+					target = fmt.Sprintf("%s.%s.svc.cluster.local:443", svcName, ns)
+				}
+			}
+			if err := ValidateTargetEndpoint(target, opts.AllowLocalhostTargets); err != nil {
+				log.Printf("[K8sBuilder] Rejecting unsafe target for service %s/%s port %d: %v", ns, svcName, publicPort, err)
+				return nil
+			}
+			hostIndex := 0
+			for _, h := range hostnames {
+				host := strings.TrimSpace(h)
+				if host == "" {
+					continue
+				}
+				sID := baseID
+				if sniHostnames != "" {
+					if portIndex == 0 {
+						sID = fmt.Sprintf("%s-%s", baseID, sanitizeID(host))
+					} else {
+						// Service IDs are port-independent; reuse the first port's IDs.
+						sID = out[hostIndex].ServiceID
+					}
+				}
+				out = append(out, dialer.ServiceConfig{
+					ServiceID:           sID,
+					Protocol:            control.TransportProtocol_TCP,
+					PublicPort:          publicPort,
+					Policy:              policy,
+					SNIHostname:         host,
+					Target:              target,
+					EnableProxyProtocol: enableProxy,
+				})
+				hostIndex++
+			}
 		}
 		return out
-	}
-
-	// Case 2: Single SNI hostname on service
-	sniHostname := getAnnotation(annos, "sni-hostname", opts.AnnotationPrefix)
-	if sniHostname != "" {
-		policy := parsePolicy(getAnnotation(annos, "policy", opts.AnnotationPrefix))
-		enableProxy := parseBool(getAnnotation(annos, "enable-proxy-protocol", opts.AnnotationPrefix))
-		publicPort := uint32(443)
-		if pStr := getAnnotation(annos, "public-port", opts.AnnotationPrefix); pStr != "" {
-			if p, err := strconv.ParseUint(pStr, 10, 32); err == nil {
-				publicPort = uint32(p)
-			}
-		}
-
-		target := getAnnotation(annos, "target", opts.AnnotationPrefix)
-		if target == "" {
-			if opts.DefaultGatewayTarget != "" {
-				target = opts.DefaultGatewayTarget
-			} else {
-				target = fmt.Sprintf("%s.%s.svc.cluster.local:443", svcName, ns)
-			}
-		}
-		if err := ValidateTargetEndpoint(target, opts.AllowLocalhostTargets); err != nil {
-			log.Printf("[K8sBuilder] Rejecting unsafe target for service %s/%s: %v", ns, svcName, err)
-			return nil
-		}
-
-		sID := getAnnotation(annos, "service-id", opts.AnnotationPrefix)
-		if sID == "" {
-			sID = svcName
-		}
-
-		return []dialer.ServiceConfig{
-			{
-				ServiceID:           sID,
-				Protocol:            control.TransportProtocol_TCP,
-				PublicPort:          publicPort,
-				Policy:              policy,
-				SNIHostname:         sniHostname,
-				Target:              target,
-				EnableProxyProtocol: enableProxy,
-			},
-		}
 	}
 
 	// Case 3: Standard L4 Service (Minecraft, PBX, etc.)
@@ -421,14 +440,15 @@ func buildFromTLSRoute(route TLSRoute, opts BuilderOptions) []dialer.ServiceConf
 	policy := parsePolicy(getAnnotation(annos, "policy", opts.AnnotationPrefix))
 	enableProxy := parseBool(getAnnotation(annos, "enable-proxy-protocol", opts.AnnotationPrefix))
 
-	// Determine public port: annotation override -> parentRef port -> default 443
-	publicPort := uint32(443)
-	if pStr := getAnnotation(annos, "public-port", opts.AnnotationPrefix); pStr != "" {
-		if p, err := strconv.ParseUint(pStr, 10, 32); err == nil {
-			publicPort = uint32(p)
-		}
-	} else if len(route.Spec.ParentRefs) > 0 && route.Spec.ParentRefs[0].Port != nil {
-		publicPort = uint32(*route.Spec.ParentRefs[0].Port)
+	// Determine public ports: annotation override -> parentRef port -> default 443.
+	defaultPort := uint32(443)
+	if len(route.Spec.ParentRefs) > 0 && route.Spec.ParentRefs[0].Port != nil {
+		defaultPort = uint32(*route.Spec.ParentRefs[0].Port)
+	}
+	publicPorts, err := parsePublicPorts(getAnnotation(annos, "public-port", opts.AnnotationPrefix), defaultPort)
+	if err != nil {
+		log.Printf("[K8sBuilder] Rejecting TLSRoute %s/%s: %v", ns, routeName, err)
+		return nil
 	}
 
 	// Determine target:
@@ -477,7 +497,7 @@ func buildFromTLSRoute(route TLSRoute, opts BuilderOptions) []dialer.ServiceConf
 	}
 
 	multipleHosts := len(route.Spec.Hostnames) > 1
-	var out []dialer.ServiceConfig
+	out := make([]dialer.ServiceConfig, 0, len(route.Spec.Hostnames)*len(publicPorts))
 
 	for _, h := range route.Spec.Hostnames {
 		hostname := strings.TrimSpace(h)
@@ -490,15 +510,17 @@ func buildFromTLSRoute(route TLSRoute, opts BuilderOptions) []dialer.ServiceConf
 			sID = fmt.Sprintf("%s-%s", baseID, sanitizeID(hostname))
 		}
 
-		out = append(out, dialer.ServiceConfig{
-			ServiceID:           sID,
-			Protocol:            control.TransportProtocol_TCP,
-			PublicPort:          publicPort,
-			Policy:              policy,
-			SNIHostname:         hostname,
-			Target:              target,
-			EnableProxyProtocol: enableProxy,
-		})
+		for _, publicPort := range publicPorts {
+			out = append(out, dialer.ServiceConfig{
+				ServiceID:           sID,
+				Protocol:            control.TransportProtocol_TCP,
+				PublicPort:          publicPort,
+				Policy:              policy,
+				SNIHostname:         hostname,
+				Target:              target,
+				EnableProxyProtocol: enableProxy,
+			})
+		}
 	}
 
 	return out
