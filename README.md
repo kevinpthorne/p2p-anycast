@@ -589,6 +589,19 @@ helm install my-origin ./deploy/helm/anycast-origin \
   --set existingSecret="my-origin-private-keys"
 ```
 
+#### Release architectures
+
+Starting with `v1.2.1`, the `anycast-origin` and `anycast-edge` container tags publish a shared
+Linux AMD64/ARM64 manifest. For example, `ghcr.io/kevinpthorne/anycast-origin:1.2.1` selects the native
+image on either platform; origin does not need an architecture-specific node selector.
+The older `1.2.0` container tags are AMD64-only.
+
+Release checks, image builds, and CLI smoke tests run on native runners for each architecture.
+Images are first pushed under immutable `<commit>-amd64` and `<commit>-arm64` tags.
+Only after both builds succeed does the manifest job publish the shared `latest`, commit, and release tags,
+and verify that each image index contains both Linux platforms.
+GitHub releases include AMD64 and ARM64 archives for all three binaries; one `SHA256SUMS` covers all six archives.
+
 ---
 
 ## Nix & NixOS Deployment
